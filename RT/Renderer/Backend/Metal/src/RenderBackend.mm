@@ -23,6 +23,7 @@ struct RasterBatch
 };
 
 static std::vector<RasterBatch> g_raster_batches;
+static std::vector<RT_RasterLineVertex> g_raster_lines;
 static double g_last_raster_log_time = 0.0;
 static double g_last_frame_log_time = 0.0;
 static double g_last_line_log_time = 0.0;
@@ -147,6 +148,87 @@ fragment float4 raster_fs(VertexOut in [[stage_in]],
 	return pipeline;
 }
 
+static id<MTLRenderPipelineState> CreateRasterLinePipeline(id<MTLDevice> device)
+{
+	static const char* kRasterLineShader = R"metal(
+#include <metal_stdlib>
+using namespace metal;
+
+struct VertexIn
+{
+	float3 pos [[attribute(0)]];
+	float4 color [[attribute(1)]];
+};
+
+struct VertexOut
+{
+	float4 position [[position]];
+	float4 color;
+};
+
+vertex VertexOut raster_line_vs(VertexIn in [[stage_in]])
+{
+	VertexOut out;
+	out.position = float4(in.pos, 1.0);
+	out.color = in.color;
+	return out;
+}
+
+fragment float4 raster_line_fs(VertexOut in [[stage_in]])
+{
+	return in.color;
+}
+)metal";
+
+	NSError* error = nil;
+	NSString* source = [NSString stringWithUTF8String:kRasterLineShader];
+	MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
+	id<MTLLibrary> library = [device newLibraryWithSource:source options:options error:&error];
+	if (!library)
+	{
+		MTL_LOG("Failed to compile raster line shader: %s", error.localizedDescription.UTF8String);
+		return nil;
+	}
+
+	id<MTLFunction> vs = [library newFunctionWithName:@"raster_line_vs"];
+	id<MTLFunction> fs = [library newFunctionWithName:@"raster_line_fs"];
+	if (!vs || !fs)
+	{
+		MTL_LOG("Failed to find raster line shader functions");
+		return nil;
+	}
+
+	MTLVertexDescriptor* vertex_desc = [[MTLVertexDescriptor alloc] init];
+	vertex_desc.attributes[0].format = MTLVertexFormatFloat3;
+	vertex_desc.attributes[0].offset = offsetof(RT_RasterLineVertex, pos);
+	vertex_desc.attributes[0].bufferIndex = 0;
+	vertex_desc.attributes[1].format = MTLVertexFormatFloat4;
+	vertex_desc.attributes[1].offset = offsetof(RT_RasterLineVertex, color);
+	vertex_desc.attributes[1].bufferIndex = 0;
+	vertex_desc.layouts[0].stride = sizeof(RT_RasterLineVertex);
+	vertex_desc.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+
+	MTLRenderPipelineDescriptor* pipeline_desc = [[MTLRenderPipelineDescriptor alloc] init];
+	pipeline_desc.vertexFunction = vs;
+	pipeline_desc.fragmentFunction = fs;
+	pipeline_desc.vertexDescriptor = vertex_desc;
+	pipeline_desc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+	pipeline_desc.colorAttachments[0].blendingEnabled = YES;
+	pipeline_desc.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+	pipeline_desc.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+	pipeline_desc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+	pipeline_desc.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorSourceAlpha;
+	pipeline_desc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+	pipeline_desc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+
+	id<MTLRenderPipelineState> pipeline = [device newRenderPipelineStateWithDescriptor:pipeline_desc error:&error];
+	if (!pipeline)
+	{
+		MTL_LOG("Failed to create raster line pipeline: %s", error.localizedDescription.UTF8String);
+	}
+	return pipeline;
+}
+
 static id<MTLTexture> CreateWhiteTexture(id<MTLDevice> device)
 {
 	MTLTextureDescriptor* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
@@ -170,7 +252,7 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
 								bool scale_viewport_to_target)
 {
 	static bool logged_raster_batches = false;
-	if (!renderEncoder || g_raster_batches.empty())
+	if (!renderEncoder || (g_raster_batches.empty() && g_raster_lines.empty()))
 		return;
 
 	MTLViewport viewport;
@@ -214,27 +296,46 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
 	scissor.height = target_height;
 	[renderEncoder setScissorRect:scissor];
 
-	[renderEncoder setRenderPipelineState:RT::g_mtl.raster_tri_pipeline];
-	[renderEncoder setFragmentSamplerState:RT::g_mtl.raster_sampler atIndex:0];
-
-	for (const RasterBatch& batch : g_raster_batches)
+	if (!g_raster_batches.empty() && RT::g_mtl.raster_tri_pipeline)
 	{
-		id<MTLTexture> texture = RT::g_mtl.raster_white_texture;
-		RT::TextureResource* tex_res = RT::g_texture_slotmap.Find(batch.texture);
-		if (tex_res && tex_res->texture)
-			texture = tex_res->texture;
+		[renderEncoder setRenderPipelineState:RT::g_mtl.raster_tri_pipeline];
+		[renderEncoder setFragmentSamplerState:RT::g_mtl.raster_sampler atIndex:0];
 
-		id<MTLBuffer> vb = [RT::g_mtl.device newBufferWithBytes:batch.vertices.data()
-													 length:batch.vertices.size() * sizeof(RT_RasterTriVertex)
-													options:MTLResourceStorageModeShared];
-		[renderEncoder setVertexBuffer:vb offset:0 atIndex:0];
-		[renderEncoder setFragmentTexture:texture atIndex:0];
-		[renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle
-						   vertexStart:0
-						   vertexCount:(NSUInteger)batch.vertices.size()];
+		for (const RasterBatch& batch : g_raster_batches)
+		{
+			id<MTLTexture> texture = RT::g_mtl.raster_white_texture;
+			RT::TextureResource* tex_res = RT::g_texture_slotmap.Find(batch.texture);
+			if (tex_res && tex_res->texture)
+				texture = tex_res->texture;
+
+			id<MTLBuffer> vb = [RT::g_mtl.device newBufferWithBytes:batch.vertices.data()
+														 length:batch.vertices.size() * sizeof(RT_RasterTriVertex)
+														options:MTLResourceStorageModeShared];
+			[renderEncoder setVertexBuffer:vb offset:0 atIndex:0];
+			[renderEncoder setFragmentTexture:texture atIndex:0];
+			[renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+							   vertexStart:0
+							   vertexCount:(NSUInteger)batch.vertices.size()];
+		}
 	}
 
-	if (!logged_raster_batches)
+	if (!g_raster_lines.empty() && RT::g_mtl.raster_line_pipeline)
+	{
+		[renderEncoder setRenderPipelineState:RT::g_mtl.raster_line_pipeline];
+		const size_t vertex_count = g_raster_lines.size() - (g_raster_lines.size() % 2);
+		if (vertex_count > 0)
+		{
+			id<MTLBuffer> vb = [RT::g_mtl.device newBufferWithBytes:g_raster_lines.data()
+														 length:vertex_count * sizeof(RT_RasterLineVertex)
+														options:MTLResourceStorageModeShared];
+			[renderEncoder setVertexBuffer:vb offset:0 atIndex:0];
+			[renderEncoder drawPrimitives:MTLPrimitiveTypeLine
+							   vertexStart:0
+							   vertexCount:(NSUInteger)vertex_count];
+		}
+	}
+
+	if (!logged_raster_batches && !g_raster_batches.empty())
 	{
 		MTL_LOG("Raster batches rendered (%zu)", g_raster_batches.size());
 		logged_raster_batches = true;
@@ -370,6 +471,7 @@ namespace RenderBackend
 		g_mtl.raster_render_requested = false;
 		g_mtl.raster_render_target_handle = RT_RESOURCE_HANDLE_NULL;
 		g_mtl.raster_tri_pipeline = CreateRasterTriPipeline(g_mtl.device);
+		g_mtl.raster_line_pipeline = CreateRasterLinePipeline(g_mtl.device);
 
 		MTLSamplerDescriptor* sampler_desc = [[MTLSamplerDescriptor alloc] init];
 		sampler_desc.minFilter = MTLSamplerMinMagFilterLinear;
@@ -593,6 +695,7 @@ namespace RenderBackend
 		g_mtl.imgui_draw_data = nullptr;
 		g_mtl.raster_render_requested = false;
 		g_raster_batches.clear();
+		g_raster_lines.clear();
 	}
 
 	void SwapBuffers()
@@ -826,17 +929,19 @@ namespace RenderBackend
 	}
 	void RasterLines(RT_RasterLineVertex* vertices, uint32_t num_vertices)
 	{
-		(void)vertices;
+		if (!vertices || num_vertices == 0)
+			return;
+		g_raster_lines.insert(g_raster_lines.end(), vertices, vertices + num_vertices);
 		g_raster_line_calls++;
 		g_raster_line_vertices += num_vertices;
-		MTL_STUB("RasterLines");
 	}
 	void RasterLinesWorld(RT_RasterLineVertex* vertices, uint32_t num_vertices)
 	{
-		(void)vertices;
+		if (!vertices || num_vertices == 0)
+			return;
+		g_raster_lines.insert(g_raster_lines.end(), vertices, vertices + num_vertices);
 		g_raster_line_calls++;
 		g_raster_line_vertices += num_vertices;
-		MTL_STUB("RasterLinesWorld");
 	}
 	void RasterRender()
 	{
@@ -858,6 +963,7 @@ namespace RenderBackend
 				[commandBuffer waitUntilCompleted];
 			}
 			g_raster_batches.clear();
+			g_raster_lines.clear();
 			g_mtl.raster_render_requested = false;
 		}
 		else

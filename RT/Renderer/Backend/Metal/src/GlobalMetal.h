@@ -137,11 +137,13 @@ namespace RT
 
 #ifdef __OBJC__
 		id<MTLRenderPipelineState> raster_tri_pipeline;
+		id<MTLRenderPipelineState> raster_line_pipeline;
 		id<MTLSamplerState> raster_sampler;
 		id<MTLTexture> raster_white_texture;
 		id<MTLTexture> raster_render_target;
 #else
 		id raster_tri_pipeline;
+		id raster_line_pipeline;
 		id raster_sampler;
 		id raster_white_texture;
 		id raster_render_target;
