@@ -109,6 +109,9 @@ void RT_DeserializeConfigFromString(RT_Config *cfg, RT_String string)
 
 RT_ConfigKeyValue *RT_ConfigFindKeyValue(RT_Config *cfg, RT_String key)
 {
+	if (!cfg)
+		return NULL;
+
 	uint32_t hash = RT_Murmur3(key.bytes, (uint32_t)key.count, 0xBEEFD00D);
 	uint32_t slot = hash % RT_ARRAY_COUNT(cfg->table);
 
@@ -126,6 +129,9 @@ RT_ConfigKeyValue *RT_ConfigFindKeyValue(RT_Config *cfg, RT_String key)
 
 RT_ConfigKeyValue *RT_ConfigFindOrCreateKeyValue(RT_Config *cfg, RT_String key)
 {
+	if (!cfg)
+		return NULL;
+
 	uint32_t hash = RT_Murmur3(key.bytes, (uint32_t)key.count, 0xBEEFD00D);
 	uint32_t slot = hash % RT_ARRAY_COUNT(cfg->table);
 
