@@ -355,11 +355,26 @@ namespace RenderBackend
 
 	// ImGui stubs
 	void RenderImGuiTexture(RT_ResourceHandle texture_handle, float width, float height) { MTL_STUB("RenderImGuiTexture"); }
-	void RenderImGui()
+void RenderImGui()
+{
+	static bool logged_imgui_submit = false;
+	g_mtl.imgui_draw_data = igGetDrawData();
+	g_mtl.imgui_render_requested = (g_mtl.imgui_draw_data != nullptr);
+	if (!logged_imgui_submit)
 	{
-		g_mtl.imgui_draw_data = igGetDrawData();
-		g_mtl.imgui_render_requested = (g_mtl.imgui_draw_data != nullptr);
+		int list_count = 0;
+		if (g_mtl.imgui_draw_data)
+			list_count = g_mtl.imgui_draw_data->CmdListsCount;
+		FILE* log_file = fopen("RTLogger.txt", "a");
+		if (log_file)
+		{
+			fprintf(log_file, "[Metal] ImGui RenderImGui called (draw_data=%p, cmd_lists=%d)\n",
+				(void*)g_mtl.imgui_draw_data, list_count);
+			fclose(log_file);
+		}
+		logged_imgui_submit = true;
 	}
+}
 
 	void QueueScreenshot(const char *file_name) { MTL_STUB("QueueScreenshot"); }
 }
