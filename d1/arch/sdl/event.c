@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "event.h"
+#include "SDL_timer.h"
 #include "SDL_syswm.h"
 #include "key.h"
 #include "mouse.h"
@@ -371,6 +372,25 @@ void event_poll()
 		ImGuiIO_AddMouseButtonEvent(io, 2, (mouse_buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE)) != 0);
 		ImGuiIO_AddMouseButtonEvent(io, 3, (mouse_buttons & SDL_BUTTON(SDL_BUTTON_X1)) != 0);
 		ImGuiIO_AddMouseButtonEvent(io, 4, (mouse_buttons & SDL_BUTTON(SDL_BUTTON_X2)) != 0);
+
+		{
+			static Uint32 last_ticks = 0;
+			Uint32 current_ticks = SDL_GetTicks();
+
+			if (last_ticks == 0 || current_ticks < last_ticks)
+			{
+				io->DeltaTime = 1.0f / 60.0f;
+			}
+			else
+			{
+				double delta_seconds = (double)(current_ticks - last_ticks) / 1000.0;
+				if (delta_seconds <= 0.0)
+					delta_seconds = 1.0 / 60.0;
+				io->DeltaTime = (float)delta_seconds;
+			}
+
+			last_ticks = current_ticks;
+		}
 	}
 #endif
 
