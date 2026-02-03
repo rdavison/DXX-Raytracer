@@ -44,7 +44,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "logger.h"
 
 #if defined(RT_DX12) || defined(RT_METAL)
-#include "Renderer.h"
+#include "RTgr.h"
 #endif
 
 #define ROW_SPACING			(SHEIGHT / 17)

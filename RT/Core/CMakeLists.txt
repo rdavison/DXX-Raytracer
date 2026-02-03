@@ -1,5 +1,5 @@
 ﻿# CMakeList.txt : Cmake project for including the RT code
-cmake_minimum_required (VERSION 3.8)
+cmake_minimum_required (VERSION 3.10)
 add_library(RT_CORE INTERFACE
 "Arena.h"
 "Common.h"

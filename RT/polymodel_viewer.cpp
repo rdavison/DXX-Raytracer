@@ -1,6 +1,12 @@
 // I'll save myself the trouble and just use C++ for this one.
 
+#if defined(RT_DX12)
+#include "Renderer/Backend/DX12/cimgui/imgui/imgui.h"
+#elif defined(RT_METAL)
+#include "Renderer/Backend/Metal/cimgui/imgui/imgui.h"
+#else
 #include <imgui.h>
+#endif
 
 // FIXME(daniel): C/C++ interop jank problem:
 // I have to wrap those game includes in extern "C", but those includes also like 

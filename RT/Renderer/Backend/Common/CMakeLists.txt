@@ -1,5 +1,5 @@
 ﻿# CMakeList.txt : Cmake project for the common renderer headers.
-cmake_minimum_required (VERSION 3.8)
+cmake_minimum_required (VERSION 3.10)
 
 #for now no headers due to the export headers for the dll. However, we still want the include directories.
 add_library(Renderer_Common INTERFACE) 

@@ -15,6 +15,10 @@
 #include "Core/MiniMath.h"
 #include "Core/Arena.h"
 #include "Core/String.h"
+
+#ifndef _countof
+#define _countof(x) (sizeof(x) / sizeof((x)[0]))
+#endif
 #include "RTgr.h"
 #include "RTmaterials.h"
 #include "Renderer.h"
@@ -411,7 +415,7 @@ void TraverseSegmentsForLights(short seg_num, uint8_t* visit_list, uint8_t* ligh
 
 		// Find the current segment's side's vertices
 		RT_Vec3 verts[4];
-		for (size_t j = 0; j < _countof(Side_to_verts_int[j]); ++j) {
+		for (size_t j = 0; j < _countof(Side_to_verts_int[i]); ++j) {
 			// Get one of the vertices of the side
 			verts[j] = RT_Vec3Fromvms_vector(&Vertices[Segments[seg_num_child].verts[Side_to_verts_int[i][j]]]);
 		}
@@ -491,7 +495,7 @@ void RT_FindAndSubmitNearbyLights(RT_Vec3 player_pos)
 
 	// Segment based
 	else if (light_culling_heuristic == 1) {
-		const auto max_lights = RT_MAX_LIGHTS - RT_RaytraceGetCurrentLightCount(); // keep some room for dynamic lights
+		const int max_lights = RT_MAX_LIGHTS - RT_RaytraceGetCurrentLightCount(); // keep some room for dynamic lights
 		m_lights_found = 0;
 		uint8_t visit_list[MAX_SEGMENTS] = { 0 };
 		uint8_t lights_added[_countof(m_lights)] = { 0 };

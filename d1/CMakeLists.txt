@@ -73,11 +73,23 @@ file(GLOB UI_SOURCES
 )
 endif()
 
+if(APPLE AND ${GRAPHICS_API} STREQUAL "Metal")
+# PhysFS forces CMAKE_SKIP_RPATH on; re-enable for the Metal dylib.
+set(CMAKE_SKIP_RPATH OFF CACHE BOOL "Skip RPATH" FORCE)
+endif()
+
 if(CMAKE_BUILD_TYPE MATCHES Release AND WIN32)
 #disable console on release.
 add_executable(descent1 WIN32)
 else()
 add_executable(descent1)
+endif()
+
+if(APPLE AND ${GRAPHICS_API} STREQUAL "Metal")
+set_target_properties(descent1 PROPERTIES
+	BUILD_RPATH "@loader_path/../RT/Renderer/Backend/Metal")
+target_link_options(descent1 PRIVATE
+	"-Wl,-rpath,@loader_path/../RT/Renderer/Backend/Metal")
 endif()
 
 target_sources(descent1 PRIVATE
@@ -250,6 +262,11 @@ elseif(APPLE)
 target_link_libraries(descent1
 "-framework Cocoa"
 "-framework IOKit"
+"-framework AudioToolbox"
+"-framework AudioUnit"
+"-framework CoreAudio"
+"-framework Carbon"
+"-framework OpenGL"
 )
 endif()
 

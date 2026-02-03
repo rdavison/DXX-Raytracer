@@ -297,7 +297,7 @@ int main(int argc, char* argv[])
 {
 	mem_init();
 #if defined(__LINUX__) || defined(__APPLE__)
-	error_init(NULL);
+	// error_init no longer exists on non-Windows builds.
 #else
 	//error_init(msgbox_error);
 	//set_warn_func(msgbox_warning);

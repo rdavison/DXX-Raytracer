@@ -478,7 +478,7 @@ int gr_init(int mode)
 	//Init video here, sadly it's wrong but it will be resized in gr_set_mode.
 	SDL_Surface* surf = SDL_SetVideoMode(w, h, 32, SDL_DOUBLEBUF | SDL_HWSURFACE | SDL_ANYFORMAT);
 	
-	SDL_EventState(SDL_IGNORE, NULL);
+	SDL_EventState(SDL_SYSWMEVENT, SDL_ENABLE);
 	RT_RendererInitParams initParams;
 	SDL_SysWMinfo info;
 	
@@ -1365,7 +1365,9 @@ void RT_ResetDynamicLightSettings(void)
 
 void RT_StartImGuiFrame(void)
 {
+#ifdef RT_DX12
 	igStartFrameWin32();
+#endif
 	igNewFrame();
 
 	// NOTE(Justin): It is times like these you realize that you are under a lot of time pressure

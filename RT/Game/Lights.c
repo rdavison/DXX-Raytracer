@@ -6,6 +6,7 @@
 #include "gr.h"
 #include "RTgr.h"
 #include "RTmaterials.h"
+#include "logger.h"
 
 #include "Core/Arena.h"
 #include "Core/Config.h"
@@ -399,7 +400,7 @@ void RT_ShowLightMenu()
 		igSliderFloat("Spot Softness", &h->spot_softness, 0.01f, 0.12f, "%.02f", 0);
 		igDummy((ImVec2){0.0f, igGetFontSize()});
 	}
-	igPopID(1);
+	igPopID();
 
 	igText("Level Lights");
 
@@ -636,7 +637,7 @@ void RT_SaveLightSettings()
 			{
 				success = false;
 
-				RT_LOG(RT_LOGSERVERITY_HIGH, "Failed to serialize %s:\n", file_name);
+				RT_LOGF(RT_LOGSERVERITY_HIGH, "Failed to serialize %s:\n", file_name);
 				for (RT_StringNode *error = cfg->first_error; error; error = error->next)
 				{
 					RT_LOGF(RT_LOGSERVERITY_HIGH, "    > %.*s\n", RT_ExpandString(error->string));

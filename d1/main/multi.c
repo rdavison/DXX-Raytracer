@@ -1405,9 +1405,11 @@ void multi_send_message_end()
 			HUD_init_message(HM_MULTI, "Only %s can disconnect observers!",Players[multi_who_is_master()].callsign);
 		else
 		{			
+#ifdef USE_UDP
 			for(int i = 0; i < Netgame.numobservers; i++) {
 				net_udp_dump_player(Netgame.observers[i].protocol.udp.addr, 0, DUMP_KICKED);
 			}
+#endif
 			Netgame.numobservers = 0; 
 			HUD_init_message(HM_MULTI, "All observers disconnected.");
 			multi_send_obs_update(1, 0); 

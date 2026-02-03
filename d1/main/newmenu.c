@@ -58,6 +58,10 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "automap.h"
 #include "rbaudio.h"
 
+#if defined(RT_DX12) || defined(RT_METAL)
+#include "RTgr.h"
+#endif
+
 #ifdef OGL
 #include "ogl_init.h"
 #endif

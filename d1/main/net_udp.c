@@ -4,14 +4,21 @@
  * 
  */
 
-typedef long long ssize_t;
-
 #ifdef NETWORK
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+
+#ifndef _WIN32
+#include <sys/time.h>
+#include <alloca.h>
+#define _alloca alloca
+#define _malloca alloca
+#else
+typedef long long ssize_t;
+#endif
 
 #include "pstypes.h"
 #include "window.h"
@@ -66,6 +73,7 @@ typedef long long ssize_t;
 //	long tv_usec;
 //} timeval;
 
+#ifdef _WIN32
 int gettimeofday(struct timeval* tp, struct timezone* tzp)
 {
 	// Note: some broken versions only have 8 trailing zero's, the correct epoch has 9 trailing zero's
@@ -86,6 +94,7 @@ int gettimeofday(struct timeval* tp, struct timezone* tzp)
 	tp->tv_usec = (long)(system_time.wMilliseconds * 1000);
 	return 0;
 }
+#endif
 
 // Prototypes
 void net_udp_init();

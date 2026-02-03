@@ -11,7 +11,7 @@
 #if defined(__MACH__) && defined(__APPLE__)
 #include <sys/mount.h>
 #include <unistd.h>	// for chdir hack
-#include <HIServices/Processes.h>
+#include <CoreServices/CoreServices.h>
 #endif
 
 #include "physfsx.h"
@@ -138,24 +138,8 @@ void PHYSFSX_init(int argc, char *argv[])
 	
 	// For Macintosh, search the same path as the .app.
 #if defined(__APPLE__) && defined(__MACH__)
-	{
-		ProcessSerialNumber psn = { 0, kCurrentProcess };
-		FSRef fsref;
-		OSStatus err;
-		
-		err = GetProcessBundleLocation(&psn, &fsref);
-		if (err == noErr)
-			err = FSRefMakePath(&fsref, (ubyte *)fullPath, PATH_MAX);
-		if (err == noErr)
-		{
-			// We now need to look into the same directory as the .app, not into any subdirectories.
-			//strncat(fullPath, "/Contents/Resources/", PATH_MAX + 4 - strlen(fullPath));
-			strncat(fullPath, "/..", PATH_MAX + 4 - strlen(fullPath));
-			fullPath[PATH_MAX + 4] = '\0';
-			PHYSFS_addToSearchPath(fullPath, 1);
-			PHYSFSX_addRelToSearchPath("data", 1);	// 'Data' subdirectory
-		}
-	}
+	// Modern macOS SDKs removed Process Manager APIs used for bundle discovery.
+	// Rely on PHYSFS_getBaseDir() and standard search paths instead.
 #elif defined(macintosh)
 	if (bundle)
 	{

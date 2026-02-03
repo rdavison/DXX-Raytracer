@@ -92,7 +92,7 @@ extern float max_seg_distance;
 #endif
 #pragma pack(pop)
 
-void RT_VertexFixToFloat_Fan(RT_TriangleBuffer *buf, int nv, g3s_point** pointlist, uint16_t texture_index, uint32_t triangle_color);
+void RT_VertexFixToFloat_Fan(RT_TriangleBuffer *buf, int nv, g3s_point** pointlist, uint32_t texture_id, uint32_t triangle_color);
 
 //Inits the glTF models that extend on the raytrace version.
 void RT_InitglTFModels(void);
@@ -100,6 +100,7 @@ void RT_InitglTFModels(void);
 void RT_InitBasePolyModel(const int polygonModelIndex, g3s_point* interp_point_list, void* model_ptr, vms_angvec* anim_angles, int first_texture);
 RT_ResourceHandle RT_InitSubPolyModel(g3s_point* interp_point_list, void* model_ptr, vms_angvec* anim_angles, int first_texture);
 void RT_InitPolyModelAndSubModels(int polymodel_index);
+void RT_InitAllPolyModels(void);
 
 void RT_DrawPolyModel(const int meshnumber, const int objNum, ubyte object_type, const vms_vector* pos, const vms_matrix* orient);
 void RT_DrawSubPolyModel(const RT_ResourceHandle submodel, const RT_Mat4* const submodel_transform, RT_RenderKey key);

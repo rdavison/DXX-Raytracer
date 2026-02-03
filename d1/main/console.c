@@ -21,7 +21,7 @@
 #include "timer.h"
 
 #if defined(RT_DX12) || defined(RT_METAL)
-#include "Renderer.h"
+#include "RTgr.h"
 #include "game.h"
 #endif
 
@@ -235,4 +235,3 @@ void con_init(void)
 		gamelog_fp = PHYSFSX_openWriteBuffered("gamelog.txt");
 	atexit(con_close);
 }
-

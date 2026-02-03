@@ -10,6 +10,9 @@
 #include "grdef.h"
 #include "globvars.h"
 
+int get_centered_x(const char *s);
+void get_char_width(ubyte c, ubyte c2, int *width, int *spacing);
+
 // ------------------------------------------------------------------
 
 static RT_Arena g_arena;
@@ -27,7 +30,7 @@ unsigned char blackpyro_tex2[8] = { 255, 168, 255, 168, 226, 168, 224, 255 };
 unsigned char whitepyro_tex1[8] = { 60, 59, 27, 27, 27, 27, 23, 60 };
 unsigned char whitepyro_tex2[8] = { 255, 144, 255, 144, 226, 144, 224, 255 };
 
-const float M_PI = 3.14159265f;
+const float kPi = 3.14159265f;
 
 RT_Mat4 projection_matrix;
 
@@ -648,8 +651,8 @@ void circle_array_init(RT_RasterTriVertex* circle_vertices, int nsides)
 	for (int i = 0; i < nsides; ++i) {
 		int next_side = (i + 1) % nsides;
 
-		ang = 2.0 * M_PI * i / nsides;
-		next_ang = 2.0 * M_PI * (next_side) / nsides;
+		ang = 2.0 * kPi * i / nsides;
+		next_ang = 2.0 * kPi * (next_side) / nsides;
 
 		cos_ang = cosf(ang);
 		sin_ang = sinf(ang);
@@ -761,7 +764,7 @@ int gr_ucircle(fix xc1, fix yc1, fix r1)
 	RT_Mat4 transform = RT_Mat4FromTranslation(translation);
 	transform = RT_Mat4Mul(transform, RT_Mat4FromScale(scale));
 
-	nsides = 10 + 2 * (int)(M_PI * f2fl(r1) / 19);
+	nsides = 10 + 2 * (int)(kPi * f2fl(r1) / 19);
 	metal_drawcircle(nsides, &transform, &col);
 
 	return 0;
@@ -785,7 +788,7 @@ int gr_disk(fix x, fix y, fix r)
 	RT_Mat4 transform = RT_Mat4FromTranslation(translation);
 	transform = RT_Mat4Mul(transform, RT_Mat4FromScale(scale));
 
-	nsides = 10 + 2 * (int)(M_PI * f2fl(r) / 19);
+	nsides = 10 + 2 * (int)(kPi * f2fl(r) / 19);
 	metal_drawcircle(nsides, &transform, &col);
 
 	return 0;
@@ -940,7 +943,6 @@ uint32_t* metal_load_bitmap_pixel_data(RT_Arena* arena, grs_bitmap* bitmap)
 					(*(dst_ptr++)) = 255;//not transparent
 				}
 #endif
-				}
 			}
 		}
 	}

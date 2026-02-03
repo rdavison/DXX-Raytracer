@@ -62,6 +62,8 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "Game/Lights.h"
 #include "RTmaterials.h"
 #include "RTgr.h"
+#include "material_viewer.h"
+#include "polymodel_viewer.h"
 #include "dx12.h"
 #endif
 

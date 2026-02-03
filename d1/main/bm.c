@@ -58,6 +58,8 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #if defined(RT_DX12) || defined(RT_METAL)
 #include "Core/MiniMath.h"
 #include "Core/Arena.h"
+#include "Game/Lights.h"
+#include "RTgr.h"
 #include "dx12.h"
 #include "RTmaterials.h"
 #endif

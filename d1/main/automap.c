@@ -68,6 +68,10 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "args.h"
 #include "logger.h"
 
+#if defined(RT_DX12) || defined(RT_METAL)
+#include "RTgr.h"
+#endif
+
 #ifdef OGL
 #include "ogl_init.h"
 #endif

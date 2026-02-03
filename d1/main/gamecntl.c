@@ -1531,7 +1531,7 @@ int ReadControls(d_event *event)
 
 #if defined(RT_DX12) || defined(RT_METAL)
 		if (g_rt_free_cam_info.g_free_cam_enabled) {
-			return;
+			return 1;
 		}
 #endif
 		do_weapon_n_item_stuff();
@@ -1539,4 +1539,3 @@ int ReadControls(d_event *event)
 
 	return 0;
 }
-

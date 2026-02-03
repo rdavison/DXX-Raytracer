@@ -758,23 +758,13 @@ void draw_model_picture(int mn, vms_angvec* orient_angles)
 	g3_start_frame();
 	g3_set_view_matrix(&temp_pos, &temp_orient, 0x9000);
 
-#if !defined(RT_DX12) && !defined(RT_METAL)
 	if (Polygon_models[mn].rad != 0)
 		temp_pos.z = fixmuldiv(DEFAULT_VIEW_DIST, Polygon_models[mn].rad, BASE_MODEL_SIZE);
 	else
 		temp_pos.z = DEFAULT_VIEW_DIST;
 
 	vm_angles_2_matrix(&temp_orient, orient_angles);
-	draw_polygon_model(&temp_pos, &temp_orient, NULL, mn, 0, lrgb, NULL, NULL, OBJ_NONE);
-#else
-
-	if (Polygon_models[mn].rad != 0)
-		temp_pos.z = fixmuldiv(DEFAULT_VIEW_DIST, Polygon_models[mn].rad, BASE_MODEL_SIZE);
-	else
-		temp_pos.z = DEFAULT_VIEW_DIST;
-	vm_angles_2_matrix(&temp_orient, orient_angles);
-	draw_polygon_model(0, 2, &temp_pos, &temp_orient, NULL, mn, 0, lrgb, NULL, NULL, OBJ_NONE);
-#endif //RT_DX12
+	draw_polygon_model(_RT_DRAW_POLY_SEND_NULL &temp_pos, &temp_orient, NULL, mn, 0, lrgb, NULL, NULL);
 
 	g3_end_frame();
 }

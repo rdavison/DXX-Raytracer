@@ -119,7 +119,8 @@
 /* Force Quartz driver for modern macOS builds. */
 #undef SDL_VIDEO_DRIVER_TOOLBOX
 #define SDL_VIDEO_DRIVER_QUARTZ	1
-#define SDL_VIDEO_DRIVER_DGA 1
+/* DGA and GLX are X11-specific; disable for Quartz-only macOS builds. */
+#undef SDL_VIDEO_DRIVER_DGA
 /* #define SDL_VIDEO_DRIVER_X11 1
 #define SDL_VIDEO_DRIVER_X11_DGAMOUSE 1
 #define SDL_VIDEO_DRIVER_X11_DYNAMIC "/usr/X11R6/lib/libX11.6.dylib"
@@ -134,7 +135,7 @@
 
 /* Enable OpenGL support */
 #define SDL_VIDEO_OPENGL	1
-#define SDL_VIDEO_OPENGL_GLX 1
+#undef SDL_VIDEO_OPENGL_GLX
 
 /* Disable screensaver */
 #define SDL_VIDEO_DISABLE_SCREENSAVER	1
