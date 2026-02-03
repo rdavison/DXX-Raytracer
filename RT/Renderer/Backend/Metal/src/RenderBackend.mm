@@ -114,6 +114,29 @@ namespace RenderBackend
 	void EndFrame()
 	{
 		@autoreleasepool {
+			{
+				NSView* view = [g_mtl.window contentView];
+				if (view)
+				{
+					NSSize view_size = [view bounds].size;
+					CGFloat scale = 1.0;
+					if ([view.window respondsToSelector:@selector(backingScaleFactor)])
+					{
+						scale = view.window.backingScaleFactor;
+					}
+					CGSize drawable_size = CGSizeMake(view_size.width * scale, view_size.height * scale);
+					if (drawable_size.width > 0 && drawable_size.height > 0)
+					{
+						g_mtl.metal_layer.drawableSize = drawable_size;
+						ImGuiIO& io = ImGui::GetIO();
+						if (io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f)
+						{
+							io.DisplayFramebufferScale.x = (float)(drawable_size.width / io.DisplaySize.x);
+							io.DisplayFramebufferScale.y = (float)(drawable_size.height / io.DisplaySize.y);
+						}
+					}
+				}
+			}
 			id<CAMetalDrawable> drawable = [g_mtl.metal_layer nextDrawable];
 			if (drawable)
 			{
