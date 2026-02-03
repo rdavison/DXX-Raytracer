@@ -39,8 +39,8 @@ void metal_start_frame()
 	// Flush rasterizer
 	RT_RasterRender();
 
-	// Set viewport to current canvas
-	RT_RasterSetViewport(grd_curcanv->cv_bitmap.bm_x, grd_curcanv->cv_bitmap.bm_y, Canvas_width, Canvas_height);
+	// Set viewport to the full screen size to match last_width/last_height normalization.
+	RT_RasterSetViewport(0.0f, 0.0f, grd_curscreen->sc_w, grd_curscreen->sc_h);
 
 	projection_matrix = RT_Mat4Perspective(RT_RadiansFromDegrees(90.0f), 1.0f, 0.1f, 5000.0f);
 }
