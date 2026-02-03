@@ -233,6 +233,13 @@ void RT_Event_Poll(ImGuiIO* io, SDL_Event* ev, int* clean_uniframe, int* idle)
 			
 			break;
 
+#if defined(SDL_MOUSEWHEEL)
+		case SDL_MOUSEWHEEL:
+			idle = 0;
+			ImGuiIO_AddMouseWheelEvent(io, (float)event.wheel.x, (float)event.wheel.y);
+			break;
+#endif
+
 		case SDL_ACTIVEEVENT:
 		{
 			Uint8 window_event = event.active.state;
