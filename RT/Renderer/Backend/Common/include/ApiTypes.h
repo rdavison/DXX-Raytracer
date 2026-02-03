@@ -49,6 +49,12 @@
 #define RT_EXPORT extern "C" __attribute__((visibility("default")))
 #endif
 
+#ifdef __APPLE__
+#ifndef thread_local
+#define thread_local _Thread_local
+#endif
+#endif
+
 #endif
 
 // ------------------------------------------------------------------

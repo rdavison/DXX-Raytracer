@@ -116,13 +116,11 @@
 
 /* Enable various video drivers */
 #define SDL_VIDEO_DRIVER_DUMMY	1
-#if ((defined TARGET_API_MAC_CARBON) && (TARGET_API_MAC_CARBON))
-#define SDL_VIDEO_DRIVER_TOOLBOX	1
-#else
+/* Force Quartz driver for modern macOS builds. */
+#undef SDL_VIDEO_DRIVER_TOOLBOX
 #define SDL_VIDEO_DRIVER_QUARTZ	1
-#endif
 #define SDL_VIDEO_DRIVER_DGA 1
-#define SDL_VIDEO_DRIVER_X11 1
+/* #define SDL_VIDEO_DRIVER_X11 1
 #define SDL_VIDEO_DRIVER_X11_DGAMOUSE 1
 #define SDL_VIDEO_DRIVER_X11_DYNAMIC "/usr/X11R6/lib/libX11.6.dylib"
 #define SDL_VIDEO_DRIVER_X11_DYNAMIC_XEXT "/usr/X11R6/lib/libXext.6.dylib"
@@ -132,7 +130,7 @@
 #define SDL_VIDEO_DRIVER_X11_XINERAMA 1
 #define SDL_VIDEO_DRIVER_X11_XME 1
 #define SDL_VIDEO_DRIVER_X11_XRANDR 1
-#define SDL_VIDEO_DRIVER_X11_XV 1
+#define SDL_VIDEO_DRIVER_X11_XV 1 */
 
 /* Enable OpenGL support */
 #define SDL_VIDEO_OPENGL	1
