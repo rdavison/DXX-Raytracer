@@ -213,6 +213,7 @@ namespace RenderBackend
 		MTLSamplerDescriptor* sampler_desc = [[MTLSamplerDescriptor alloc] init];
 		sampler_desc.minFilter = MTLSamplerMinMagFilterLinear;
 		sampler_desc.magFilter = MTLSamplerMinMagFilterLinear;
+		sampler_desc.mipFilter = MTLSamplerMipFilterNearest;
 		sampler_desc.sAddressMode = MTLSamplerAddressModeClampToEdge;
 		sampler_desc.tAddressMode = MTLSamplerAddressModeClampToEdge;
 		g_mtl.raster_sampler = [g_mtl.device newSamplerStateWithDescriptor:sampler_desc];
