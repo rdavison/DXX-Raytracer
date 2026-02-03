@@ -1070,4 +1070,56 @@ bool metal_ubitmapm_cs(int x, int y, int dw, int dh, grs_bitmap* bm, int c, int 
 bool metal_ubitblt(int dw, int dh, int dx, int dy, int sw, int sh, int sx, int sy, grs_bitmap* src, grs_bitmap* dst, int texfilt)
 {
 	// One of the use-cases of this function is to render a preview of a savegame in the load menu
+	(void)texfilt;
+	if (!src)
+		return 0;
+
+	if (!src->dxtexture)
+	{
+		metal_init_texture(src);
+		metal_loadbmtexture_f(src, GameCfg.TexFilt);
+	}
+
+	int dst_x = dx;
+	int dst_y = dy;
+	if (dst)
+	{
+		dst_x += dst->bm_x;
+		dst_y += dst->bm_y;
+	}
+
+	float xo = dst_x / (float)last_width;
+	float xf = (dst_x + dw) / (float)last_width;
+	float yo = 1.0f - dst_y / (float)last_height;
+	float yf = 1.0f - (dst_y + dh) / (float)last_height;
+
+	xo = (xo - 0.5f) * 2.0f;
+	xf = (xf - 0.5f) * 2.0f;
+	yo = (yo - 0.5f) * 2.0f;
+	yf = (yf - 0.5f) * 2.0f;
+
+	const float tw = (float)src->dxtexture->tw;
+	const float th = (float)src->dxtexture->th;
+	float u1 = (tw > 0.0f) ? (float)sx / tw : 0.0f;
+	float v1 = (th > 0.0f) ? (float)sy / th : 0.0f;
+	float u2 = (tw > 0.0f) ? (float)(sx + sw) / tw : 1.0f;
+	float v2 = (th > 0.0f) ? (float)(sy + sh) / th : 1.0f;
+
+	RT_Vec4 col = RT_Vec4Make(1.0f, 1.0f, 1.0f, 1.0f);
+	RT_RasterTriVertex vertices[6] = {
+		{.pos = { xf, yo, 0.0f }, .uv = { u2, v1 }, .color = col, .texture_index = 0 },
+		{.pos = { xf, yf, 0.0f }, .uv = { u2, v2 }, .color = col, .texture_index = 0 },
+		{.pos = { xo, yf, 0.0f }, .uv = { u1, v2 }, .color = col, .texture_index = 0 },
+		{.pos = { xf, yo, 0.0f }, .uv = { u2, v1 }, .color = col, .texture_index = 0 },
+		{.pos = { xo, yf, 0.0f }, .uv = { u1, v2 }, .color = col, .texture_index = 0 },
+		{.pos = { xo, yo, 0.0f }, .uv = { u1, v1 }, .color = col, .texture_index = 0 }
+	};
+
+	RT_RasterTrianglesParams raster_tri_params = { 0 };
+	raster_tri_params.texture_handle = src->dxtexture->handle;
+	raster_tri_params.num_vertices = 6;
+	raster_tri_params.vertices = vertices;
+
+	RT_RasterTriangles(&raster_tri_params, 1);
+	return 0;
 }
