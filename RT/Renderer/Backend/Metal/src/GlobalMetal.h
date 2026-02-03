@@ -133,6 +133,7 @@ namespace RT
 		float viewport_width;
 		float viewport_height;
 		bool  raster_render_requested;
+		RT_ResourceHandle raster_render_target_handle;
 
 #ifdef __OBJC__
 		id<MTLRenderPipelineState> raster_tri_pipeline;

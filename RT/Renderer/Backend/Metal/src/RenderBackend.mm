@@ -260,6 +260,7 @@ namespace RenderBackend
 		g_mtl.viewport_width = 0.0f;
 		g_mtl.viewport_height = 0.0f;
 		g_mtl.raster_render_requested = false;
+		g_mtl.raster_render_target_handle = RT_RESOURCE_HANDLE_NULL;
 		g_mtl.raster_tri_pipeline = CreateRasterTriPipeline(g_mtl.device);
 
 		MTLSamplerDescriptor* sampler_desc = [[MTLSamplerDescriptor alloc] init];
@@ -606,11 +607,13 @@ namespace RenderBackend
 					tex_res->texture = rt_texture;
 				}
 				g_mtl.raster_render_target = tex_res->texture;
+				g_mtl.raster_render_target_handle = texture;
 				return;
 			}
 		}
 
 		g_mtl.raster_render_target = nil;
+		g_mtl.raster_render_target_handle = RT_RESOURCE_HANDLE_NULL;
 	}
 	void RasterTriangles(RT_RasterTrianglesParams* params, uint32_t num_params)
 	{
@@ -659,8 +662,45 @@ namespace RenderBackend
 		}
 	}
 	void RasterRenderDebugLines() { MTL_STUB("RasterRenderDebugLines"); }
-	void RasterBlitScene(const RT_Vec2* top_left, const RT_Vec2* bottom_right, bool blit_blend) { MTL_STUB("RasterBlitScene"); }
-	void RasterBlit(RT_ResourceHandle src, const RT_Vec2* top_left, const RT_Vec2* bottom_right, bool blit_blend) { MTL_STUB("RasterBlit"); }
+	void RasterBlitScene(const RT_Vec2* top_left, const RT_Vec2* bottom_right, bool blit_blend)
+	{
+		if (RT_RESOURCE_HANDLE_VALID(g_mtl.raster_render_target_handle))
+		{
+			RasterBlit(g_mtl.raster_render_target_handle, top_left, bottom_right, blit_blend);
+		}
+	}
+	void RasterBlit(RT_ResourceHandle src, const RT_Vec2* top_left, const RT_Vec2* bottom_right, bool blit_blend)
+	{
+		(void)blit_blend;
+		if (!top_left || !bottom_right)
+			return;
+
+		float width = (g_mtl.output_width > 0) ? (float)g_mtl.output_width : (float)g_mtl.metal_layer.drawableSize.width;
+		float height = (g_mtl.output_height > 0) ? (float)g_mtl.output_height : (float)g_mtl.metal_layer.drawableSize.height;
+		if (width <= 0.0f || height <= 0.0f)
+			return;
+
+		float x0 = (top_left->x / width) * 2.0f - 1.0f;
+		float y0 = 1.0f - (top_left->y / height) * 2.0f;
+		float x1 = (bottom_right->x / width) * 2.0f - 1.0f;
+		float y1 = 1.0f - (bottom_right->y / height) * 2.0f;
+
+		RT_Vec4 color = { 1.0f, 1.0f, 1.0f, 1.0f };
+		RT_RasterTriVertex vertices[6] = {
+			{ .pos = { x1, y0, 0.0f }, .uv = { 1.0f, 0.0f }, .color = color, .texture_index = 0 },
+			{ .pos = { x1, y1, 0.0f }, .uv = { 1.0f, 1.0f }, .color = color, .texture_index = 0 },
+			{ .pos = { x0, y1, 0.0f }, .uv = { 0.0f, 1.0f }, .color = color, .texture_index = 0 },
+			{ .pos = { x1, y0, 0.0f }, .uv = { 1.0f, 0.0f }, .color = color, .texture_index = 0 },
+			{ .pos = { x0, y1, 0.0f }, .uv = { 0.0f, 1.0f }, .color = color, .texture_index = 0 },
+			{ .pos = { x0, y0, 0.0f }, .uv = { 0.0f, 0.0f }, .color = color, .texture_index = 0 },
+		};
+
+		RT_RasterTrianglesParams params = {};
+		params.texture_handle = src;
+		params.vertices = vertices;
+		params.num_vertices = 6;
+		RasterTriangles(&params, 1);
+	}
 
 	// ImGui stubs
 	void RenderImGuiTexture(RT_ResourceHandle texture_handle, float width, float height)
