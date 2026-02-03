@@ -205,6 +205,11 @@ void gr_ubitmap( int x, int y, grs_bitmap *bm )
 			else
 				gr_ubitmap00( x, y, bm );
 			return;
+#if defined(RT_DX12) || defined(RT_METAL)
+		case BM_OGL: // RT uses BM_OGL slot for RTDX12/Metal canvas type
+			dx12_ubitmapm_cs(x, y, -1, -1, bm, -1, F1_0);
+			return;
+#endif
 #ifdef OGL
 		case BM_OGL:
 			ogl_ubitmapm_cs(x,y,-1,-1,bm,-1,F1_0);
@@ -235,6 +240,11 @@ void gr_ubitmapm( int x, int y, grs_bitmap *bm )
 			else
 				gr_ubitmap00m( x, y, bm );
 			return;
+#if defined(RT_DX12) || defined(RT_METAL)
+		case BM_OGL: // RT uses BM_OGL slot for RTDX12/Metal canvas type
+			dx12_ubitmapm_cs(x, y, -1, -1, bm, -1, F1_0);
+			return;
+#endif
 #ifdef OGL
 		case BM_OGL:
 			ogl_ubitmapm_cs(x,y,-1,-1,bm,-1,F1_0);

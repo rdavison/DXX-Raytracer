@@ -220,6 +220,10 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
 		float max_alpha = 0.0f;
 		size_t textured_batches = 0;
 		size_t total_vertices = 0;
+		float min_x = 1.0f;
+		float max_x = -1.0f;
+		float min_y = 1.0f;
+		float max_y = -1.0f;
 		for (const RasterBatch& batch : g_raster_batches)
 		{
 			if (batch.texture.value != 0)
@@ -228,15 +232,23 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
 			{
 				min_alpha = (v.color.w < min_alpha) ? v.color.w : min_alpha;
 				max_alpha = (v.color.w > max_alpha) ? v.color.w : max_alpha;
+				min_x = (v.pos.x < min_x) ? v.pos.x : min_x;
+				max_x = (v.pos.x > max_x) ? v.pos.x : max_x;
+				min_y = (v.pos.y < min_y) ? v.pos.y : min_y;
+				max_y = (v.pos.y > max_y) ? v.pos.y : max_y;
 				total_vertices++;
 			}
 		}
-		MTL_LOG("Raster batches this frame: %zu (verts=%zu textured=%zu alpha[%.2f..%.2f] viewport %.0fx%.0f target %lux%lu)",
+		MTL_LOG("Raster batches this frame: %zu (verts=%zu textured=%zu alpha[%.2f..%.2f] bounds x[%.2f..%.2f] y[%.2f..%.2f] viewport %.0fx%.0f target %lux%lu)",
 			g_raster_batches.size(),
 			total_vertices,
 			textured_batches,
 			min_alpha,
 			max_alpha,
+			min_x,
+			max_x,
+			min_y,
+			max_y,
 			RT::g_mtl.viewport_width,
 			RT::g_mtl.viewport_height,
 			(unsigned long)target_width,
@@ -455,12 +467,19 @@ namespace RenderBackend
 			double now = CFAbsoluteTimeGetCurrent();
 			if (now - g_last_frame_log_time >= 1.0)
 			{
-				MTL_LOG("Frame: batches=%zu imgui=%d rt=%s rt_handle=%llu clear=%s",
+				NSView* view = [g_mtl.window contentView];
+				NSSize view_size = view ? [view bounds].size : NSMakeSize(0, 0);
+				CGSize drawable_size = g_mtl.metal_layer ? g_mtl.metal_layer.drawableSize : CGSizeMake(0, 0);
+				MTL_LOG("Frame: batches=%zu imgui=%d rt=%s rt_handle=%llu clear=%s view=%.0fx%.0f drawable=%.0fx%.0f",
 					g_raster_batches.size(),
 					had_imgui ? 1 : 0,
 					g_mtl.raster_render_target ? "yes" : "no",
 					(unsigned long long)g_mtl.raster_render_target_handle.value,
-					"yes");
+					"yes",
+					view_size.width,
+					view_size.height,
+					drawable_size.width,
+					drawable_size.height);
 				g_last_frame_log_time = now;
 			}
 			id<CAMetalDrawable> drawable = [g_mtl.metal_layer nextDrawable];
