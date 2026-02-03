@@ -181,6 +181,20 @@ typedef struct SDL_SysWMinfo {
 	int data;
 } SDL_SysWMinfo;
 
+#elif defined(SDL_VIDEO_DRIVER_QUARTZ)
+
+/** The Quartz custom event structure */
+struct SDL_SysWMmsg {
+	SDL_version version;
+	int data;
+};
+
+/** The Quartz custom window manager information structure */
+typedef struct SDL_SysWMinfo {
+	SDL_version version;
+	void *nswindow;		/**< The Cocoa NSWindow* */
+} SDL_SysWMinfo;
+
 #else
 
 /** The generic custom event structure */
