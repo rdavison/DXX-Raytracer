@@ -78,6 +78,34 @@
         "CMAKE_BUILD_TYPE": "Release",
         "GRAPHICS_API": "OpenGL"
       }
+    },
+    {
+      "name": "metal-mac-debug",
+      "description": "Metal debug build for macOS",
+      "inherits": "default",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "GRAPHICS_API": "Metal"
+      }
+    },
+    {
+      "name": "metal-mac-release",
+      "description": "Metal release build for macOS",
+      "inherits": "default",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "GRAPHICS_API": "Metal"
+      }
     }
   ]
 }
