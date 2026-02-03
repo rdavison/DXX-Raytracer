@@ -1,19 +1,17 @@
 #include "RenderBackend.h"
 #include "GlobalMetal.h"
 
-#import <Metal/Metal.h>
-#import <QuartzCore/CAMetalLayer.h>
-#import <AppKit/NSWindow.h>
-#import <AppKit/NSView.h>
-
 RT_MaterialEdge g_rt_material_edges[RT_MAX_MATERIAL_EDGES];
 uint16_t        g_rt_material_indices[RT_MAX_MATERIALS];
 
-using namespace RT;
+namespace RT
+{
+	MetalState g_mtl;
+	SlotMap<MeshResource> g_mesh_slotmap(MAX_BOTTOM_LEVELS);
+	SlotMap<TextureResource> g_texture_slotmap(RT_MAX_TEXTURES);
+}
 
-MetalState g_mtl;
-SlotMap<MeshResource> g_mesh_slotmap(MAX_BOTTOM_LEVELS);
-SlotMap<TextureResource> g_texture_slotmap(RT_MAX_TEXTURES);
+using namespace RT;
 
 namespace RenderBackend
 {

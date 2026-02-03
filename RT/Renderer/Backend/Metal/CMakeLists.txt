@@ -55,7 +55,7 @@ target_include_directories(Renderer PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/STB"
     "${CMAKE_CURRENT_SOURCE_DIR}/CGLTF"
     "${CMAKE_SOURCE_DIR}/RT/Renderer/Backend/Common/include"
-    "${CMAKE_SOURCE_DIR}/RT/Core"
+    "${CMAKE_SOURCE_DIR}/RT"
 )
 
 target_link_libraries(Renderer

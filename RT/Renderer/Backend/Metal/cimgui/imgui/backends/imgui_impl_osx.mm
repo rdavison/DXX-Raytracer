@@ -651,24 +651,6 @@ void ImGui_ImplOSX_NewFrame(NSView* view)
 
 // Must only be called for a mouse event, otherwise an exception occurs
 // (Note that NSEventTypeScrollWheel is considered "other input". Oddly enough an exception does not occur with it, but the value will sometimes be wrong!)
-static ImGuiMouseSource GetMouseSource(NSEvent* event)
-{
-    switch (event.subtype)
-    {
-        case NSEventSubtypeTabletPoint:
-            return ImGuiMouseSource_Pen;
-        // macOS considers input from relative touch devices (like the trackpad or Apple Magic Mouse) to be touch input.
-        // This doesn't really make sense for Dear ImGui, which expects absolute touch devices only.
-        // There does not seem to be a simple way to disambiguate things here so we consider NSEventSubtypeTouch events to always come from mice.
-        // See https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html#//apple_ref/doc/uid/10000060i-CH13-SW24
-        //case NSEventSubtypeTouch:
-        //    return ImGuiMouseSource_TouchScreen;
-        case NSEventSubtypeMouseEvent:
-        default:
-            return ImGuiMouseSource_Mouse;
-    }
-}
-
 static bool ImGui_ImplOSX_HandleEvent(NSEvent* event, NSView* view)
 {
     // Only process events from the window containing ImGui view
@@ -681,7 +663,6 @@ static bool ImGui_ImplOSX_HandleEvent(NSEvent* event, NSView* view)
         int button = (int)[event buttonNumber];
         if (button >= 0 && button < ImGuiMouseButton_COUNT)
         {
-            io.AddMouseSourceEvent(GetMouseSource(event));
             io.AddMouseButtonEvent(button, true);
         }
         return io.WantCaptureMouse;
@@ -692,7 +673,6 @@ static bool ImGui_ImplOSX_HandleEvent(NSEvent* event, NSView* view)
         int button = (int)[event buttonNumber];
         if (button >= 0 && button < ImGuiMouseButton_COUNT)
         {
-            io.AddMouseSourceEvent(GetMouseSource(event));
             io.AddMouseButtonEvent(button, false);
         }
         return io.WantCaptureMouse;
@@ -708,7 +688,6 @@ static bool ImGui_ImplOSX_HandleEvent(NSEvent* event, NSView* view)
             mousePoint = NSMakePoint(mousePoint.x, mousePoint.y);
         else
             mousePoint = NSMakePoint(mousePoint.x, view.bounds.size.height - mousePoint.y);
-        io.AddMouseSourceEvent(GetMouseSource(event));
         io.AddMousePosEvent((float)mousePoint.x, (float)mousePoint.y);
         return io.WantCaptureMouse;
     }
