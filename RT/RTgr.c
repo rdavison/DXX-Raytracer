@@ -27,7 +27,11 @@
 #include <SDL/SDL.h>
 #include <SDL/SDL_syswm.h>
 
+#ifdef RT_DX12
 #include "dx12.h"
+#elif defined(RT_METAL)
+#include "metal_bridge.h"
+#endif
 #include "globvars.h"
 #include "GLTFLoader.h"
 #include "rle.h"
@@ -482,7 +486,11 @@ int gr_init(int mode)
 	SDL_GetWMInfo(&info);
 
 	initParams.arena = &g_arena;
+	#ifdef RT_DX12
 	initParams.window_handle = info.window;
+	#elif defined(RT_METAL)
+	initParams.window_handle = info.nswindow;
+	#endif
 
 	igCreateContext(NULL);
 
@@ -490,7 +498,9 @@ int gr_init(int mode)
 	io->ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	io->Fonts->Flags |= ImFontAtlasFlags_NoBakedLines;
 
+	#ifdef RT_DX12
 	igInitWin32(info.window);
+	#endif
 	RT_RendererInit(&initParams);
 
 	float fov;
