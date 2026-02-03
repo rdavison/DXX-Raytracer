@@ -385,15 +385,16 @@ namespace RenderBackend
 					{
 						scale = view.window.backingScaleFactor;
 					}
-					CGSize drawable_size = CGSizeMake(view_size.width * scale, view_size.height * scale);
+					// Use logical drawable size to keep UI sizing consistent; macOS will upscale on Retina.
+					CGSize drawable_size = CGSizeMake(view_size.width, view_size.height);
 					if (drawable_size.width > 0 && drawable_size.height > 0)
 					{
 						g_mtl.metal_layer.drawableSize = drawable_size;
 						ImGuiIO& io = ImGui::GetIO();
 						if (io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f)
 						{
-							float scale_x = (float)(drawable_size.width / io.DisplaySize.x);
-							float scale_y = (float)(drawable_size.height / io.DisplaySize.y);
+							float scale_x = 1.0f;
+							float scale_y = 1.0f;
 							io.DisplayFramebufferScale.x = scale_x;
 							io.DisplayFramebufferScale.y = scale_y;
 
