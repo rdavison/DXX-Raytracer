@@ -24,6 +24,8 @@
 #include "SDL_QuartzVideo.h"
 #include "SDL_QuartzWM.h"
 
+#include <stdint.h>
+
 
 void QZ_FreeWMCursor     (_THIS, WMcursor *cursor) { 
 
@@ -364,7 +366,11 @@ int  QZ_IconifyWindow (_THIS) {
 
 int QZ_GetWMInfo(_THIS, SDL_SysWMinfo *info)
 {
+    #if defined(SDL_VIDEO_DRIVER_QUARTZ)
     info->nswindow = qz_window;
+    #else
+    info->data = (int)(intptr_t)qz_window;
+    #endif
     return 0;
 }
 

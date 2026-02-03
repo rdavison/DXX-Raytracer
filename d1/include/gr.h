@@ -23,6 +23,12 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "pstypes.h"
 #include "fix.h"
 
+#if defined(RT_DX12)
+#include "dx12.h"
+#elif defined(RT_METAL)
+#include "metal_bridge.h"
+#endif
+
 extern int HiresGFXAvailable;
 
 // some defines for transparency and blending
