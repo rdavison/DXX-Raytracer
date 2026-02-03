@@ -26,6 +26,16 @@ namespace RT
 
 using namespace RT;
 
+static void LogImGuiRenderProof()
+{
+	FILE* log_file = fopen("RTLogger.txt", "a");
+	if (log_file)
+	{
+		fprintf(log_file, "[Metal] ImGui draw data rendered\n");
+		fclose(log_file);
+	}
+}
+
 namespace RenderBackend
 {
 	void Init(const RT_RendererInitParams* params)
@@ -203,6 +213,7 @@ namespace RenderBackend
 					if (!logged_imgui_render)
 					{
 						MTL_LOG("ImGui draw data rendered");
+						LogImGuiRenderProof();
 						logged_imgui_render = true;
 					}
 				}
