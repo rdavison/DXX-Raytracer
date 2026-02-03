@@ -380,6 +380,8 @@ void event_poll()
 				io->DisplaySize.x = (float)surface->w;
 				io->DisplaySize.y = (float)surface->h;
 			}
+			io->DisplayFramebufferScale.x = 1.0f;
+			io->DisplayFramebufferScale.y = 1.0f;
 		}
 
 		{
