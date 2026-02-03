@@ -146,6 +146,25 @@ namespace RenderBackend
 								ImGui_ImplMetal_DestroyDeviceObjects();
 								ImGui_ImplMetal_CreateDeviceObjects(g_mtl.device);
 							}
+							{
+								static float last_logged_width = 0.0f;
+								static float last_logged_height = 0.0f;
+								float expected_width = io.DisplaySize.x * io.DisplayFramebufferScale.x;
+								float expected_height = io.DisplaySize.y * io.DisplayFramebufferScale.y;
+								if (fabsf(expected_width - (float)drawable_size.width) > 1.0f ||
+									fabsf(expected_height - (float)drawable_size.height) > 1.0f)
+								{
+									if (last_logged_width != (float)drawable_size.width ||
+										last_logged_height != (float)drawable_size.height)
+									{
+										MTL_LOG("ImGui scale mismatch: display %.0fx%.0f, drawable %.0fx%.0f",
+											io.DisplaySize.x, io.DisplaySize.y,
+											(float)drawable_size.width, (float)drawable_size.height);
+										last_logged_width = (float)drawable_size.width;
+										last_logged_height = (float)drawable_size.height;
+									}
+								}
+							}
 							g_mtl.imgui_last_scale_x = scale_x;
 							g_mtl.imgui_last_scale_y = scale_y;
 						}
