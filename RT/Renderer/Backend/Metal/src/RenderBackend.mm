@@ -153,16 +153,11 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
 			const float logical_h = RT::g_mtl.viewport_height;
 			const float scale_x = (float)target_width / logical_w;
 			const float scale_y = (float)target_height / logical_h;
-			const float scale = (scale_x < scale_y) ? scale_x : scale_y;
-			const float scaled_w = logical_w * scale;
-			const float scaled_h = logical_h * scale;
-			const float pad_x = ((float)target_width - scaled_w) * 0.5f;
-			const float pad_y = ((float)target_height - scaled_h) * 0.5f;
 
-			viewport.originX = RT::g_mtl.viewport_x * scale + pad_x;
-			viewport.originY = RT::g_mtl.viewport_y * scale + pad_y;
-			viewport.width = scaled_w;
-			viewport.height = scaled_h;
+			viewport.originX = RT::g_mtl.viewport_x * scale_x;
+			viewport.originY = RT::g_mtl.viewport_y * scale_y;
+			viewport.width = logical_w * scale_x;
+			viewport.height = logical_h * scale_y;
 		}
 		else
 		{
