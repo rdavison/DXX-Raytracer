@@ -5,6 +5,7 @@
 #endif
 
 #include "GlobalMetal.h"
+#include "cimgui.h"
 
 RT_MaterialEdge g_rt_material_edges[RT_MAX_MATERIAL_EDGES];
 uint16_t        g_rt_material_indices[RT_MAX_MATERIALS];
@@ -59,6 +60,8 @@ namespace RenderBackend
 		// g_mtl.render_width = ...
 
 		g_mtl.frame_semaphore = dispatch_semaphore_create(BACK_BUFFER_COUNT);
+		g_mtl.imgui_render_requested = false;
+		g_mtl.imgui_draw_data = nullptr;
 		
 		// Init IO
 		// g_mtl.io.config = ... (similar to DX12?) 
@@ -117,6 +120,11 @@ namespace RenderBackend
 				id<MTLCommandBuffer> commandBuffer = [g_mtl.command_queue commandBuffer];
 				
 				id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
+				if (g_mtl.imgui_render_requested && g_mtl.imgui_draw_data)
+				{
+					// ImGui overlay pass (after scene, before present).
+					// Actual draw encoding will be implemented in the ImGui renderer tasks.
+				}
 				[renderEncoder endEncoding];
 
 				[commandBuffer presentDrawable:drawable];
@@ -138,6 +146,8 @@ namespace RenderBackend
 
 		g_mtl.frame_index++;
 		g_mtl.current_back_buffer_index = (g_mtl.current_back_buffer_index + 1) % BACK_BUFFER_COUNT;
+		g_mtl.imgui_render_requested = false;
+		g_mtl.imgui_draw_data = nullptr;
 	}
 
 	void SwapBuffers()
@@ -229,7 +239,11 @@ namespace RenderBackend
 
 	// ImGui stubs
 	void RenderImGuiTexture(RT_ResourceHandle texture_handle, float width, float height) { MTL_STUB("RenderImGuiTexture"); }
-	void RenderImGui() { MTL_STUB("RenderImGui"); }
+	void RenderImGui()
+	{
+		g_mtl.imgui_draw_data = igGetDrawData();
+		g_mtl.imgui_render_requested = (g_mtl.imgui_draw_data != nullptr);
+	}
 
 	void QueueScreenshot(const char *file_name) { MTL_STUB("QueueScreenshot"); }
 }
