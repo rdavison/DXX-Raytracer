@@ -2,6 +2,9 @@
 #include <Core/Vault.h>
 #include <Core/String.h>
 
+#include <stdio.h>
+#include <sys/types.h>
+
 bool vault_data_cached = false;
 RT_VaultNode* vault_data = nullptr;
 
@@ -295,7 +298,11 @@ bool RT_GetFileFromVault(const RT_VaultNode* vault, const RT_String file_name, R
 					memcpy(&file_len, &index_entry[260], 4);
 
 					buffer.bytes = (char*)RT_ArenaAllocNoZero(&g_thread_arena, (size_t)file_len + 1, 16);
+					#ifdef _WIN32
 					_fseeki64(f2, file_pos, SEEK_SET);
+					#else
+					fseeko(f2, (off_t)file_pos, SEEK_SET);
+					#endif
 
 					fread(buffer.bytes, sizeof(char), file_len, f2);
 

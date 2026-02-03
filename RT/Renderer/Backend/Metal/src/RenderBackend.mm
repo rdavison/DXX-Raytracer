@@ -89,7 +89,10 @@ namespace RenderBackend
 	void BeginScene(const RT_SceneSettings* scene_settings)
 	{
 		g_mtl.scene.prev_camera = g_mtl.scene.camera;
-		g_mtl.scene.camera = scene_settings->camera;
+		if (scene_settings->camera)
+		{
+			g_mtl.scene.camera = *scene_settings->camera;
+		}
 		g_mtl.scene.render_blit = scene_settings->render_blit;
 	}
 
