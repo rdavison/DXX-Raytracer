@@ -9,6 +9,7 @@
 #include "imgui_internal.h"
 #include "cimgui.h"
 #include "imgui_impl_metal.h"
+#include <math.h>
 
 RT_MaterialEdge g_rt_material_edges[RT_MAX_MATERIAL_EDGES];
 uint16_t        g_rt_material_indices[RT_MAX_MATERIALS];
@@ -67,6 +68,8 @@ namespace RenderBackend
 		g_mtl.frame_semaphore = dispatch_semaphore_create(BACK_BUFFER_COUNT);
 		g_mtl.imgui_render_requested = false;
 		g_mtl.imgui_draw_data = nullptr;
+		g_mtl.imgui_last_scale_x = 0.0f;
+		g_mtl.imgui_last_scale_y = 0.0f;
 		
 		// Init IO
 		// g_mtl.io.config = ... (similar to DX12?) 
@@ -131,8 +134,20 @@ namespace RenderBackend
 						ImGuiIO& io = ImGui::GetIO();
 						if (io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f)
 						{
-							io.DisplayFramebufferScale.x = (float)(drawable_size.width / io.DisplaySize.x);
-							io.DisplayFramebufferScale.y = (float)(drawable_size.height / io.DisplaySize.y);
+							float scale_x = (float)(drawable_size.width / io.DisplaySize.x);
+							float scale_y = (float)(drawable_size.height / io.DisplaySize.y);
+							io.DisplayFramebufferScale.x = scale_x;
+							io.DisplayFramebufferScale.y = scale_y;
+
+							if (g_mtl.imgui_last_scale_x > 0.0f &&
+								(fabsf(scale_x - g_mtl.imgui_last_scale_x) > 0.01f ||
+								 fabsf(scale_y - g_mtl.imgui_last_scale_y) > 0.01f))
+							{
+								ImGui_ImplMetal_DestroyDeviceObjects();
+								ImGui_ImplMetal_CreateDeviceObjects(g_mtl.device);
+							}
+							g_mtl.imgui_last_scale_x = scale_x;
+							g_mtl.imgui_last_scale_y = scale_y;
 						}
 					}
 				}

@@ -130,6 +130,8 @@ namespace RT
 		float viewport_offset_y;
 		bool  imgui_render_requested;
 		::ImDrawData *imgui_draw_data;
+		float imgui_last_scale_x;
+		float imgui_last_scale_y;
 
 		// Mesh tracking
 		MeshTracker mesh_tracker;
