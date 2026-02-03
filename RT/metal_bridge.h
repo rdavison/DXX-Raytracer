@@ -4,8 +4,7 @@
 #include "ApiTypes.h"
 #include "Renderer.h"
 
-typedef struct grs_bitmap grs_bitmap;
-typedef struct grs_font grs_font;
+#include "gr.h"
 
 typedef struct _dx_texture
 {
