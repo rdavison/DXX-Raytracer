@@ -9,6 +9,8 @@
 RT_MaterialEdge g_rt_material_edges[RT_MAX_MATERIAL_EDGES];
 uint16_t        g_rt_material_indices[RT_MAX_MATERIALS];
 
+using namespace RT;
+
 MetalState g_mtl;
 SlotMap<MeshResource> g_mesh_slotmap(MAX_BOTTOM_LEVELS);
 SlotMap<TextureResource> g_texture_slotmap(RT_MAX_TEXTURES);
@@ -17,7 +19,7 @@ namespace RenderBackend
 {
 	void Init(const RT_RendererInitParams* params)
 	{
-		g_mtl.io.arena = params->arena;
+		g_mtl.arena = params->arena;
 
 		NSWindow* window = (__bridge NSWindow*)params->window_handle;
 		g_mtl.window = window;

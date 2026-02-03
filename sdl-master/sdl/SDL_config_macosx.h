@@ -116,11 +116,9 @@
 
 /* Enable various video drivers */
 #define SDL_VIDEO_DRIVER_DUMMY	1
-#if ((defined TARGET_API_MAC_CARBON) && (TARGET_API_MAC_CARBON))
-#define SDL_VIDEO_DRIVER_TOOLBOX	1
-#else
+/* Force Quartz driver for modern macOS builds. */
+#undef SDL_VIDEO_DRIVER_TOOLBOX
 #define SDL_VIDEO_DRIVER_QUARTZ	1
-#endif
 #define SDL_VIDEO_DRIVER_DGA 1
 /* #define SDL_VIDEO_DRIVER_X11 1
 #define SDL_VIDEO_DRIVER_X11_DGAMOUSE 1

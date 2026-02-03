@@ -2,6 +2,13 @@
 
 // ------------------------------------------------------------------
 
+#if defined(__clang__) || defined(__GNUC__)
+#include_next <string.h>
+#else
+#include <string.h>
+#endif
+
+#include "Common.h"
 #include "ApiTypes.h"
 #include "Arena.h"
 

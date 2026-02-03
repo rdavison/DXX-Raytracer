@@ -31,6 +31,7 @@ namespace RT
 	constexpr uint32_t MAX_RASTER_TRIANGLES   = 10000;
 	constexpr uint32_t MAX_RASTER_LINES       = 5000;
 	constexpr uint32_t MAX_DEBUG_LINES_WORLD  = 5000;
+	constexpr uint32_t MAX_BOTTOM_LEVELS      = 1000;
 
 	struct MeshResource
 	{
