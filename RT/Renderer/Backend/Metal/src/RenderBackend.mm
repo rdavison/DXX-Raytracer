@@ -606,7 +606,15 @@ namespace RenderBackend
 	void RasterBlit(RT_ResourceHandle src, const RT_Vec2* top_left, const RT_Vec2* bottom_right, bool blit_blend) { MTL_STUB("RasterBlit"); }
 
 	// ImGui stubs
-	void RenderImGuiTexture(RT_ResourceHandle texture_handle, float width, float height) { MTL_STUB("RenderImGuiTexture"); }
+	void RenderImGuiTexture(RT_ResourceHandle texture_handle, float width, float height)
+	{
+		TextureResource* res = g_texture_slotmap.Find(texture_handle);
+		id<MTLTexture> texture = g_mtl.raster_white_texture;
+		if (res && res->texture)
+			texture = res->texture;
+
+		ImGui::Image((ImTextureID)(__bridge void*)texture, ImVec2(width, height));
+	}
 void RenderImGui()
 {
 	static bool logged_imgui_submit = false;
