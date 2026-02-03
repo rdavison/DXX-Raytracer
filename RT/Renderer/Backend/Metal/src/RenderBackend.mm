@@ -30,6 +30,29 @@ static uint64_t g_raster_line_calls = 0;
 static uint64_t g_raster_line_vertices = 0;
 static bool g_raster_fullscreen_cover = false;
 
+static bool ComputeRasterFullscreenCover()
+{
+	if (g_raster_batches.empty())
+		return false;
+
+	float min_x = 1.0f;
+	float max_x = -1.0f;
+	float min_y = 1.0f;
+	float max_y = -1.0f;
+	for (const RasterBatch& batch : g_raster_batches)
+	{
+		for (const RT_RasterTriVertex& v : batch.vertices)
+		{
+			min_x = (v.pos.x < min_x) ? v.pos.x : min_x;
+			max_x = (v.pos.x > max_x) ? v.pos.x : max_x;
+			min_y = (v.pos.y < min_y) ? v.pos.y : min_y;
+			max_y = (v.pos.y > max_y) ? v.pos.y : max_y;
+		}
+	}
+	return (min_x <= -0.98f) && (max_x >= 0.98f) &&
+		(min_y <= -0.98f) && (max_y >= 0.98f);
+}
+
 static id<MTLRenderPipelineState> CreateRasterTriPipeline(id<MTLDevice> device)
 {
 	static const char* kRasterTriShader = R"metal(
@@ -477,6 +500,13 @@ namespace RenderBackend
 				}
 			}
 			double now = CFAbsoluteTimeGetCurrent();
+			bool should_clear = true;
+			const bool fullscreen_cover_now = ComputeRasterFullscreenCover();
+			if (had_raster_batches)
+				should_clear = fullscreen_cover_now;
+			else if (had_imgui)
+				should_clear = false;
+
 			if (now - g_last_frame_log_time >= 1.0)
 			{
 				NSView* view = [g_mtl.window contentView];
@@ -487,7 +517,7 @@ namespace RenderBackend
 					had_imgui ? 1 : 0,
 					g_mtl.raster_render_target ? "yes" : "no",
 					(unsigned long long)g_mtl.raster_render_target_handle.value,
-					"yes",
+					should_clear ? "yes" : "no",
 					view_size.width,
 					view_size.height,
 					drawable_size.width,
@@ -506,12 +536,6 @@ namespace RenderBackend
 				g_raster_line_vertices = 0;
 				g_last_line_log_time = now;
 			}
-			bool should_clear = true;
-			if (had_raster_batches)
-				should_clear = g_raster_fullscreen_cover;
-			else if (had_imgui)
-				should_clear = false;
-
 			id<CAMetalDrawable> drawable = [g_mtl.metal_layer nextDrawable];
 			if (drawable)
 			{
