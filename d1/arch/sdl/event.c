@@ -194,7 +194,9 @@ void RT_Event_Poll(ImGuiIO* io, SDL_Event* ev, int* clean_uniframe, int* idle)
 				}
 			}
 			if (io->WantCaptureKeyboard != true || event.key.keysym.sym == SDLK_LALT || event.key.keysym.sym == SDLK_LSHIFT || event.key.keysym.sym == SDLK_F1)
+			{
 				key_handler((SDL_KeyboardEvent*)&event);
+			}
 
 			break;
 		case SDL_MOUSEBUTTONDOWN:
@@ -222,15 +224,19 @@ void RT_Event_Poll(ImGuiIO* io, SDL_Event* ev, int* clean_uniframe, int* idle)
 
 			}
 			if (io->WantCaptureMouse != true)
+			{
 				mouse_button_handler((SDL_MouseButtonEvent*)&event);
+			}
 			break;
 
 		case SDL_MOUSEMOTION:
 			idle = 0;
 			
 			ImGuiIO_AddMousePosEvent(io, (float)event.motion.x, (float)event.motion.y);
-			if (!igIsWindowFocused(ImGuiFocusedFlags_AnyWindow))
+			if (io->WantCaptureMouse != true && !igIsWindowFocused(ImGuiFocusedFlags_AnyWindow))
+			{
 				mouse_motion_handler((SDL_MouseMotionEvent*)&event);
+			}
 			
 			break;
 
@@ -265,16 +271,22 @@ void RT_Event_Poll(ImGuiIO* io, SDL_Event* ev, int* clean_uniframe, int* idle)
 
 		case SDL_JOYBUTTONDOWN:
 		case SDL_JOYBUTTONUP:
-			joy_button_handler((SDL_JoyButtonEvent*)&event);
-			idle = 0;
+			if (io->WantCaptureKeyboard != true)
+			{
+				joy_button_handler((SDL_JoyButtonEvent*)&event);
+				idle = 0;
+			}
 			break;
 		case SDL_JOYAXISMOTION:
-			if (joy_axis_handler((SDL_JoyAxisEvent*)&event))
+			if (io->WantCaptureKeyboard != true && joy_axis_handler((SDL_JoyAxisEvent*)&event))
 				idle = 0;
 			break;
 		case SDL_JOYHATMOTION:
-			joy_hat_handler((SDL_JoyHatEvent*)&event);
-			idle = 0;
+			if (io->WantCaptureKeyboard != true)
+			{
+				joy_hat_handler((SDL_JoyHatEvent*)&event);
+				idle = 0;
+			}
 			break;
 		case SDL_JOYBALLMOTION:
 			break;
