@@ -5,6 +5,8 @@
 #endif
 
 #include "GlobalMetal.h"
+#include "imgui.h"
+#include "imgui_internal.h"
 #include "cimgui.h"
 
 RT_MaterialEdge g_rt_material_edges[RT_MAX_MATERIAL_EDGES];

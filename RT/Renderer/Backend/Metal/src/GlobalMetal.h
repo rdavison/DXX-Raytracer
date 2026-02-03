@@ -14,9 +14,10 @@
 #include <dispatch/dispatch.h>
 #endif
 
+struct ImDrawData;
+
 namespace RT
 {
-	struct ImDrawData;
 
 	// Minimal stub — the DX12 backend generates this from shared shader headers.
 	// Metal will get its own tweak vars once shaders are implemented.
@@ -128,7 +129,7 @@ namespace RT
 		char  queued_screenshot_name[1024];
 		float viewport_offset_y;
 		bool  imgui_render_requested;
-		ImDrawData *imgui_draw_data;
+		::ImDrawData *imgui_draw_data;
 
 		// Mesh tracking
 		MeshTracker mesh_tracker;
