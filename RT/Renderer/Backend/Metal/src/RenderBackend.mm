@@ -133,7 +133,7 @@ namespace RenderBackend
 				if (g_mtl.imgui_render_requested && g_mtl.imgui_draw_data)
 				{
 					// ImGui overlay pass (after scene, before present).
-					// Actual draw encoding will be implemented in the ImGui renderer tasks.
+					ImGui_ImplMetal_RenderDrawData(g_mtl.imgui_draw_data, commandBuffer, renderEncoder);
 				}
 				[renderEncoder endEncoding];
 
