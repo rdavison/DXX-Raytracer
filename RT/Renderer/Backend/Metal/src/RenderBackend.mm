@@ -132,14 +132,14 @@ static id<MTLTexture> CreateWhiteTexture(id<MTLDevice> device)
 	return texture;
 }
 
-static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder, NSUInteger target_width, NSUInteger target_height)
+static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder, NSUInteger target_width, NSUInteger target_height, bool use_viewport)
 {
 	static bool logged_raster_batches = false;
 	if (!renderEncoder || g_raster_batches.empty())
 		return;
 
 	MTLViewport viewport;
-	if (RT::g_mtl.viewport_width > 0.0f && RT::g_mtl.viewport_height > 0.0f)
+	if (use_viewport && RT::g_mtl.viewport_width > 0.0f && RT::g_mtl.viewport_height > 0.0f)
 	{
 		viewport.originX = RT::g_mtl.viewport_x;
 		viewport.originY = RT::g_mtl.viewport_y;
@@ -158,10 +158,10 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder, NSUIn
 	[renderEncoder setViewport:viewport];
 
 	MTLScissorRect scissor;
-	scissor.x = (NSUInteger)viewport.originX;
-	scissor.y = (NSUInteger)viewport.originY;
-	scissor.width = (NSUInteger)viewport.width;
-	scissor.height = (NSUInteger)viewport.height;
+	scissor.x = 0;
+	scissor.y = 0;
+	scissor.width = target_width;
+	scissor.height = target_height;
 	[renderEncoder setScissorRect:scissor];
 
 	[renderEncoder setRenderPipelineState:RT::g_mtl.raster_tri_pipeline];
@@ -404,7 +404,7 @@ namespace RenderBackend
 				id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
 				if (g_mtl.raster_render_requested && !g_raster_batches.empty() && g_mtl.raster_tri_pipeline)
 				{
-					EncodeRasterBatches(renderEncoder, drawable.texture.width, drawable.texture.height);
+					EncodeRasterBatches(renderEncoder, drawable.texture.width, drawable.texture.height, false);
 				}
 				if (g_mtl.imgui_render_requested && g_mtl.imgui_draw_data)
 				{
@@ -654,7 +654,7 @@ namespace RenderBackend
 				passDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
 
 				id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
-				EncodeRasterBatches(renderEncoder, g_mtl.raster_render_target.width, g_mtl.raster_render_target.height);
+				EncodeRasterBatches(renderEncoder, g_mtl.raster_render_target.width, g_mtl.raster_render_target.height, true);
 				[renderEncoder endEncoding];
 
 				[commandBuffer commit];
