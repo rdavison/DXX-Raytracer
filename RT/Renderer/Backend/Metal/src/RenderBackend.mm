@@ -133,7 +133,7 @@ namespace RenderBackend
 				id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
 				if (g_mtl.imgui_render_requested && g_mtl.imgui_draw_data)
 				{
-					// ImGui overlay pass (after scene, before present).
+					// ImGui overlay pass (after scene, before present) into the swapchain render pass.
 					ImGui_ImplMetal_RenderDrawData(g_mtl.imgui_draw_data, commandBuffer, renderEncoder);
 				}
 				[renderEncoder endEncoding];
