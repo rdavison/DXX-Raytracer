@@ -624,6 +624,7 @@ namespace RenderBackend
 	}
 	void RasterTriangles(RT_RasterTrianglesParams* params, uint32_t num_params)
 	{
+		static bool logged_raster_bounds = false;
 		if (!params || num_params == 0)
 			return;
 
@@ -637,6 +638,25 @@ namespace RenderBackend
 			batch.texture = batch_params->texture_handle;
 			batch.vertices.assign(batch_params->vertices, batch_params->vertices + batch_params->num_vertices);
 			g_raster_batches.emplace_back(std::move(batch));
+
+			if (!logged_raster_bounds)
+			{
+				float min_x = batch_params->vertices[0].pos.x;
+				float max_x = batch_params->vertices[0].pos.x;
+				float min_y = batch_params->vertices[0].pos.y;
+				float max_y = batch_params->vertices[0].pos.y;
+				for (uint32_t v = 1; v < batch_params->num_vertices; v++)
+				{
+					float x = batch_params->vertices[v].pos.x;
+					float y = batch_params->vertices[v].pos.y;
+					min_x = x < min_x ? x : min_x;
+					max_x = x > max_x ? x : max_x;
+					min_y = y < min_y ? y : min_y;
+					max_y = y > max_y ? y : max_y;
+				}
+				MTL_LOG("Raster batch bounds: x[%.2f..%.2f] y[%.2f..%.2f] verts=%u", min_x, max_x, min_y, max_y, batch_params->num_vertices);
+				logged_raster_bounds = true;
+			}
 		}
 	}
 	void RasterLines(RT_RasterLineVertex* vertices, uint32_t num_vertices) { MTL_STUB("RasterLines"); }
