@@ -24,6 +24,7 @@ struct RasterBatch
 
 static std::vector<RasterBatch> g_raster_batches;
 static double g_last_raster_log_time = 0.0;
+static double g_last_frame_log_time = 0.0;
 
 static id<MTLRenderPipelineState> CreateRasterTriPipeline(id<MTLDevice> device)
 {
@@ -375,6 +376,8 @@ namespace RenderBackend
 
 		@autoreleasepool {
 			static bool logged_imgui_render = false;
+			bool had_raster_batches = !g_raster_batches.empty();
+			bool had_imgui = g_mtl.imgui_render_requested && g_mtl.imgui_draw_data;
 			{
 				NSView* view = [g_mtl.window contentView];
 				if (view)
@@ -430,6 +433,17 @@ namespace RenderBackend
 					}
 				}
 			}
+			double now = CFAbsoluteTimeGetCurrent();
+			if (now - g_last_frame_log_time >= 1.0)
+			{
+				MTL_LOG("Frame: batches=%zu imgui=%d rt=%s rt_handle=%llu clear=%s",
+					g_raster_batches.size(),
+					had_imgui ? 1 : 0,
+					g_mtl.raster_render_target ? "yes" : "no",
+					(unsigned long long)g_mtl.raster_render_target_handle.value,
+					"yes");
+				g_last_frame_log_time = now;
+			}
 			id<CAMetalDrawable> drawable = [g_mtl.metal_layer nextDrawable];
 			if (drawable)
 			{
@@ -441,7 +455,7 @@ namespace RenderBackend
 
 				id<MTLCommandBuffer> commandBuffer = [g_mtl.command_queue commandBuffer];
 				
-				if (g_mtl.imgui_render_requested && g_mtl.imgui_draw_data)
+				if (had_imgui)
 				{
 					ImGui_ImplMetal_NewFrame(passDescriptor);
 				}
@@ -451,7 +465,7 @@ namespace RenderBackend
 				{
 					EncodeRasterBatches(renderEncoder, drawable.texture.width, drawable.texture.height, true, true);
 				}
-				if (g_mtl.imgui_render_requested && g_mtl.imgui_draw_data)
+				if (had_imgui)
 				{
 					// ImGui overlay pass (after scene, before present) into the swapchain render pass.
 					ImGui_ImplMetal_RenderDrawData(g_mtl.imgui_draw_data, commandBuffer, renderEncoder);
@@ -642,6 +656,7 @@ namespace RenderBackend
 	}
 	void RasterSetRenderTarget(RT_ResourceHandle texture)
 	{
+		static bool logged_set_target = false;
 		if (RT_RESOURCE_HANDLE_VALID(texture))
 		{
 			TextureResource* tex_res = g_texture_slotmap.Find(texture);
@@ -660,10 +675,23 @@ namespace RenderBackend
 				}
 				g_mtl.raster_render_target = tex_res->texture;
 				g_mtl.raster_render_target_handle = texture;
+				if (!logged_set_target)
+				{
+					MTL_LOG("RasterSetRenderTarget: handle=%llu size=%lux%lu",
+						(unsigned long long)texture.value,
+						(unsigned long)tex_res->texture.width,
+						(unsigned long)tex_res->texture.height);
+					logged_set_target = true;
+				}
 				return;
 			}
 		}
 
+		if (!logged_set_target)
+		{
+			MTL_LOG("RasterSetRenderTarget: reset to swapchain");
+			logged_set_target = true;
+		}
 		g_mtl.raster_render_target = nil;
 		g_mtl.raster_render_target_handle = RT_RESOURCE_HANDLE_NULL;
 	}
@@ -739,6 +767,12 @@ namespace RenderBackend
 		static bool logged_missing_target = false;
 		if (RT_RESOURCE_HANDLE_VALID(g_mtl.raster_render_target_handle))
 		{
+			static bool logged_blit_scene = false;
+			if (!logged_blit_scene)
+			{
+				MTL_LOG("RasterBlitScene: blitting render target");
+				logged_blit_scene = true;
+			}
 			RasterBlit(g_mtl.raster_render_target_handle, top_left, bottom_right, blit_blend);
 		}
 		else if (!logged_missing_target)
