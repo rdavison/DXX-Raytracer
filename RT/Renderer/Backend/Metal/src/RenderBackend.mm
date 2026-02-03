@@ -664,9 +664,15 @@ namespace RenderBackend
 	void RasterRenderDebugLines() { MTL_STUB("RasterRenderDebugLines"); }
 	void RasterBlitScene(const RT_Vec2* top_left, const RT_Vec2* bottom_right, bool blit_blend)
 	{
+		static bool logged_missing_target = false;
 		if (RT_RESOURCE_HANDLE_VALID(g_mtl.raster_render_target_handle))
 		{
 			RasterBlit(g_mtl.raster_render_target_handle, top_left, bottom_right, blit_blend);
+		}
+		else if (!logged_missing_target)
+		{
+			MTL_LOG("RasterBlitScene skipped (no render target)");
+			logged_missing_target = true;
 		}
 	}
 	void RasterBlit(RT_ResourceHandle src, const RT_Vec2* top_left, const RT_Vec2* bottom_right, bool blit_blend)
