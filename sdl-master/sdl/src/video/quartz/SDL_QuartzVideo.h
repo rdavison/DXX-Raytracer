@@ -218,7 +218,7 @@ void         QZ_SetCaption       (_THIS, const char *title, const char *icon);
 void         QZ_SetIcon          (_THIS, SDL_Surface *icon, Uint8 *mask);
 int          QZ_IconifyWindow    (_THIS);
 SDL_GrabMode QZ_GrabInput        (_THIS, SDL_GrabMode grab_mode);
-/*int          QZ_GetWMInfo        (_THIS, SDL_SysWMinfo *info);*/
+int          QZ_GetWMInfo        (_THIS, SDL_SysWMinfo *info);
 
 /* Private functions (used internally) */
 void         QZ_PrivateWarpCursor (_THIS, int x, int y);

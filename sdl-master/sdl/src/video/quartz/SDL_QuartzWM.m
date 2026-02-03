@@ -362,11 +362,11 @@ int  QZ_IconifyWindow (_THIS) {
     }
 }
 
-/*
-int  QZ_GetWMInfo  (_THIS, SDL_SysWMinfo *info) { 
-    info->nsWindowPtr = qz_window;
-    return 0; 
-}*/
+int QZ_GetWMInfo(_THIS, SDL_SysWMinfo *info)
+{
+    info->nswindow = qz_window;
+    return 0;
+}
 
 void QZ_ChangeGrabState (_THIS, int action) {
 

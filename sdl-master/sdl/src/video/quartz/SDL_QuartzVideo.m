@@ -220,7 +220,7 @@ static SDL_VideoDevice* QZ_CreateDevice (int device_index)
     device->SetCaption    = QZ_SetCaption;
     device->SetIcon       = QZ_SetIcon;
     device->IconifyWindow = QZ_IconifyWindow;
-    /*device->GetWMInfo     = QZ_GetWMInfo;*/
+    device->GetWMInfo     = QZ_GetWMInfo;
     device->GrabInput     = QZ_GrabInput;
 
     /*
@@ -1686,4 +1686,3 @@ int QZ_GetGammaRamp (_THIS, Uint16 *ramp)
 
     return 0;
 }
-
