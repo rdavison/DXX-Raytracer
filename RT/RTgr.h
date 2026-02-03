@@ -85,7 +85,11 @@ extern float max_seg_distance;
 #pragma pack(push, 8)
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 //For some reason the global include path doesn't work. Ah well then we use this!
+#ifdef RT_DX12
 #include "../../RT/Renderer/Backend/DX12/cimgui/cimgui.h"
+#elif defined(RT_METAL)
+#include "../../RT/Renderer/Backend/Metal/cimgui/cimgui.h"
+#endif
 #pragma pack(pop)
 
 void RT_VertexFixToFloat_Fan(RT_TriangleBuffer *buf, int nv, g3s_point** pointlist, uint16_t texture_index, uint32_t triangle_color);
