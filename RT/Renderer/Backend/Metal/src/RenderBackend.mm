@@ -132,7 +132,11 @@ static id<MTLTexture> CreateWhiteTexture(id<MTLDevice> device)
 	return texture;
 }
 
-static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder, NSUInteger target_width, NSUInteger target_height, bool use_viewport)
+static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
+								NSUInteger target_width,
+								NSUInteger target_height,
+								bool use_viewport,
+								bool scale_viewport_to_target)
 {
 	static bool logged_raster_batches = false;
 	if (!renderEncoder || g_raster_batches.empty())
@@ -141,10 +145,30 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder, NSUIn
 	MTLViewport viewport;
 	if (use_viewport && RT::g_mtl.viewport_width > 0.0f && RT::g_mtl.viewport_height > 0.0f)
 	{
-		viewport.originX = RT::g_mtl.viewport_x;
-		viewport.originY = RT::g_mtl.viewport_y;
-		viewport.width = RT::g_mtl.viewport_width;
-		viewport.height = RT::g_mtl.viewport_height;
+		if (scale_viewport_to_target && target_width > 0 && target_height > 0)
+		{
+			const float logical_w = RT::g_mtl.viewport_width;
+			const float logical_h = RT::g_mtl.viewport_height;
+			const float scale_x = (float)target_width / logical_w;
+			const float scale_y = (float)target_height / logical_h;
+			const float scale = (scale_x < scale_y) ? scale_x : scale_y;
+			const float scaled_w = logical_w * scale;
+			const float scaled_h = logical_h * scale;
+			const float pad_x = ((float)target_width - scaled_w) * 0.5f;
+			const float pad_y = ((float)target_height - scaled_h) * 0.5f;
+
+			viewport.originX = RT::g_mtl.viewport_x * scale + pad_x;
+			viewport.originY = RT::g_mtl.viewport_y * scale + pad_y;
+			viewport.width = scaled_w;
+			viewport.height = scaled_h;
+		}
+		else
+		{
+			viewport.originX = RT::g_mtl.viewport_x;
+			viewport.originY = RT::g_mtl.viewport_y;
+			viewport.width = RT::g_mtl.viewport_width;
+			viewport.height = RT::g_mtl.viewport_height;
+		}
 	}
 	else
 	{
@@ -404,7 +428,7 @@ namespace RenderBackend
 				id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
 				if (!g_raster_batches.empty() && g_mtl.raster_tri_pipeline)
 				{
-					EncodeRasterBatches(renderEncoder, drawable.texture.width, drawable.texture.height, false);
+					EncodeRasterBatches(renderEncoder, drawable.texture.width, drawable.texture.height, true, true);
 				}
 				if (g_mtl.imgui_render_requested && g_mtl.imgui_draw_data)
 				{
@@ -674,7 +698,7 @@ namespace RenderBackend
 				passDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
 
 				id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
-				EncodeRasterBatches(renderEncoder, g_mtl.raster_render_target.width, g_mtl.raster_render_target.height, true);
+				EncodeRasterBatches(renderEncoder, g_mtl.raster_render_target.width, g_mtl.raster_render_target.height, true, false);
 				[renderEncoder endEncoding];
 
 				[commandBuffer commit];
