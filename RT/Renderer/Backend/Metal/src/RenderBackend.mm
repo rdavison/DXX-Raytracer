@@ -484,8 +484,51 @@ namespace RenderBackend
 
 	RT_ResourceHandle UploadTexture(const RT_UploadTextureParams& texture_params)
 	{
-		MTL_STUB("UploadTexture");
-		return RT_RESOURCE_HANDLE_NULL;
+		if (!texture_params.image.pixels || texture_params.image.width == 0 || texture_params.image.height == 0)
+			return RT_RESOURCE_HANDLE_NULL;
+
+		MTLPixelFormat pixel_format = MTLPixelFormatRGBA8Unorm;
+		uint32_t bytes_per_pixel = 4;
+		switch (texture_params.image.format)
+		{
+			case RT_TextureFormat_RGBA8:
+				pixel_format = MTLPixelFormatRGBA8Unorm;
+				bytes_per_pixel = 4;
+				break;
+			case RT_TextureFormat_RGBA8_SRGB:
+				pixel_format = MTLPixelFormatRGBA8Unorm_sRGB;
+				bytes_per_pixel = 4;
+				break;
+			case RT_TextureFormat_R8:
+				pixel_format = MTLPixelFormatR8Unorm;
+				bytes_per_pixel = 1;
+				break;
+			default:
+				MTL_LOG("UploadTexture: unsupported format %u", texture_params.image.format);
+				return RT_RESOURCE_HANDLE_NULL;
+		}
+
+		MTLTextureDescriptor* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pixel_format
+																					width:texture_params.image.width
+																				   height:texture_params.image.height
+																				mipmapped:NO];
+		desc.usage = MTLTextureUsageShaderRead;
+		desc.storageMode = MTLStorageModeShared;
+		id<MTLTexture> texture = [g_mtl.device newTextureWithDescriptor:desc];
+		if (!texture)
+			return RT_RESOURCE_HANDLE_NULL;
+
+		uint32_t pitch = texture_params.image.pitch;
+		if (pitch == 0)
+			pitch = texture_params.image.width * bytes_per_pixel;
+
+		MTLRegion region = { {0, 0, 0}, {texture_params.image.width, texture_params.image.height, 1} };
+		[texture replaceRegion:region mipmapLevel:0 withBytes:texture_params.image.pixels bytesPerRow:pitch];
+
+		TextureResource res = {};
+		res.texture = texture;
+		RT_ResourceHandle handle = g_texture_slotmap.Insert(res);
+		return handle;
 	}
 
 	RT_ResourceHandle UploadMesh(const RT_UploadMeshParams& mesh_params)
