@@ -1377,6 +1377,14 @@ void RT_StartImGuiFrame(void)
 	{
 		io->DisplaySize = (ImVec2){0.0f, 0.0f};
 	}
+	if (!io->Fonts->TexReady)
+	{
+		unsigned char *pixels = NULL;
+		int width = 0;
+		int height = 0;
+		int bytes_per_pixel = 0;
+		ImFontAtlas_GetTexDataAsRGBA32(io->Fonts, &pixels, &width, &height, &bytes_per_pixel);
+	}
 	igNewFrame();
 
 	// NOTE(Justin): It is times like these you realize that you are under a lot of time pressure
