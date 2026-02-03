@@ -216,8 +216,27 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
 	double now = CFAbsoluteTimeGetCurrent();
 	if (now - g_last_raster_log_time >= 1.0)
 	{
-		MTL_LOG("Raster batches this frame: %zu (viewport %.0fx%.0f, target %lux%lu)",
+		float min_alpha = 1.0f;
+		float max_alpha = 0.0f;
+		size_t textured_batches = 0;
+		size_t total_vertices = 0;
+		for (const RasterBatch& batch : g_raster_batches)
+		{
+			if (batch.texture.value != 0)
+				textured_batches++;
+			for (const RT_RasterTriVertex& v : batch.vertices)
+			{
+				min_alpha = (v.color.w < min_alpha) ? v.color.w : min_alpha;
+				max_alpha = (v.color.w > max_alpha) ? v.color.w : max_alpha;
+				total_vertices++;
+			}
+		}
+		MTL_LOG("Raster batches this frame: %zu (verts=%zu textured=%zu alpha[%.2f..%.2f] viewport %.0fx%.0f target %lux%lu)",
 			g_raster_batches.size(),
+			total_vertices,
+			textured_batches,
+			min_alpha,
+			max_alpha,
 			RT::g_mtl.viewport_width,
 			RT::g_mtl.viewport_height,
 			(unsigned long)target_width,
