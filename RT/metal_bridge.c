@@ -35,6 +35,9 @@ const float kPi = 3.14159265f;
 
 RT_Mat4 projection_matrix;
 static double g_last_frame_log_time = 0.0;
+static uint64_t g_urect_calls = 0;
+static uint64_t g_ubitblt_calls = 0;
+static uint64_t g_ubitmap_calls = 0;
 
 void metal_start_frame()
 {
@@ -51,14 +54,20 @@ void metal_start_frame()
 		if (now - g_last_frame_log_time >= 1.0)
 		{
 			RT_LOGF(RT_LOGSERVERITY_INFO,
-				"[Metal] Frame: last=%dx%d screen=%dx%d canvas=%dx%d viewport=%.0fx%.0f fnt=%d/%d",
+				"[Metal] Frame: last=%dx%d screen=%dx%d canvas=%dx%d viewport=%.0fx%.0f fnt=%d/%d urect=%llu ubitmap=%llu ubitblt=%llu",
 				last_width, last_height,
 				grd_curscreen->sc_w, grd_curscreen->sc_h,
 				grd_curcanv ? grd_curcanv->cv_bitmap.bm_w : 0,
 				grd_curcanv ? grd_curcanv->cv_bitmap.bm_h : 0,
 				grd_curscreen ? (float)grd_curscreen->sc_w : 0.0f,
 				grd_curscreen ? (float)grd_curscreen->sc_h : 0.0f,
-				FNTScaleX, FNTScaleY);
+				FNTScaleX, FNTScaleY,
+				(unsigned long long)g_urect_calls,
+				(unsigned long long)g_ubitmap_calls,
+				(unsigned long long)g_ubitblt_calls);
+			g_urect_calls = 0;
+			g_ubitmap_calls = 0;
+			g_ubitblt_calls = 0;
 			g_last_frame_log_time = now;
 		}
 	}
@@ -531,6 +540,7 @@ void metal_init_font(grs_font* font)
 // Use: uidraw.c, menubar.c, keypad.c, icon.c, newmenu.c, kconfig.c
 void metal_urect(int left, int top, int right, int bot)
 {
+	g_urect_calls++;
 	float xo, yo, xf, yf, color_r, color_g, color_b, color_a;
 	int c = grd_curcanv->cv_color;
 
@@ -973,6 +983,7 @@ uint32_t* metal_load_bitmap_pixel_data(RT_Arena* arena, grs_bitmap* bitmap)
 
 bool metal_ubitmapm_cs(int x, int y, int dw, int dh, grs_bitmap* bm, int c, int scale)
 {
+	g_ubitmap_calls++;
 	if (!bm->dxtexture)
 	{
 		metal_init_texture(bm);
@@ -1065,10 +1076,12 @@ bool metal_ubitmapm_cs(int x, int y, int dw, int dh, grs_bitmap* bm, int c, int 
 	raster_tri_params.vertices = vertices;
 
 	RT_RasterTriangles(&raster_tri_params, 1);
+	return 1;
 }
 
 bool metal_ubitblt(int dw, int dh, int dx, int dy, int sw, int sh, int sx, int sy, grs_bitmap* src, grs_bitmap* dst, int texfilt)
 {
+	g_ubitblt_calls++;
 	// One of the use-cases of this function is to render a preview of a savegame in the load menu
 	(void)texfilt;
 	if (!src)
@@ -1121,5 +1134,5 @@ bool metal_ubitblt(int dw, int dh, int dx, int dy, int sw, int sh, int sx, int s
 	raster_tri_params.vertices = vertices;
 
 	RT_RasterTriangles(&raster_tri_params, 1);
-	return 0;
+	return 1;
 }
