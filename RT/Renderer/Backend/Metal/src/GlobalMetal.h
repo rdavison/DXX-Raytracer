@@ -138,10 +138,12 @@ namespace RT
 		id<MTLRenderPipelineState> raster_tri_pipeline;
 		id<MTLSamplerState> raster_sampler;
 		id<MTLTexture> raster_white_texture;
+		id<MTLTexture> raster_render_target;
 #else
 		id raster_tri_pipeline;
 		id raster_sampler;
 		id raster_white_texture;
+		id raster_render_target;
 #endif
 		bool  imgui_render_requested;
 		::ImDrawData *imgui_draw_data;
