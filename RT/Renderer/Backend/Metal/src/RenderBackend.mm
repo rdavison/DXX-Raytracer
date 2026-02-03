@@ -25,6 +25,10 @@ struct RasterBatch
 static std::vector<RasterBatch> g_raster_batches;
 static double g_last_raster_log_time = 0.0;
 static double g_last_frame_log_time = 0.0;
+static double g_last_line_log_time = 0.0;
+static uint64_t g_raster_line_calls = 0;
+static uint64_t g_raster_line_vertices = 0;
+static bool g_raster_fullscreen_cover = false;
 
 static id<MTLRenderPipelineState> CreateRasterTriPipeline(id<MTLDevice> device)
 {
@@ -214,7 +218,6 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
 	}
 
 	double now = CFAbsoluteTimeGetCurrent();
-	if (now - g_last_raster_log_time >= 1.0)
 	{
 		float min_alpha = 1.0f;
 		float max_alpha = 0.0f;
@@ -239,21 +242,30 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
 				total_vertices++;
 			}
 		}
-		MTL_LOG("Raster batches this frame: %zu (verts=%zu textured=%zu alpha[%.2f..%.2f] bounds x[%.2f..%.2f] y[%.2f..%.2f] viewport %.0fx%.0f target %lux%lu)",
-			g_raster_batches.size(),
-			total_vertices,
-			textured_batches,
-			min_alpha,
-			max_alpha,
-			min_x,
-			max_x,
-			min_y,
-			max_y,
-			RT::g_mtl.viewport_width,
-			RT::g_mtl.viewport_height,
-			(unsigned long)target_width,
-			(unsigned long)target_height);
-		g_last_raster_log_time = now;
+		g_raster_fullscreen_cover =
+			(min_x <= -0.98f) && (max_x >= 0.98f) &&
+			(min_y <= -0.98f) && (max_y >= 0.98f);
+		if (now - g_last_raster_log_time >= 1.0)
+		{
+			size_t untextured_batches = (textured_batches <= g_raster_batches.size()) ? (g_raster_batches.size() - textured_batches) : 0;
+			MTL_LOG("Raster batches this frame: %zu (verts=%zu textured=%zu untextured=%zu alpha[%.2f..%.2f] bounds x[%.2f..%.2f] y[%.2f..%.2f] fullscreen=%s viewport %.0fx%.0f target %lux%lu)",
+				g_raster_batches.size(),
+				total_vertices,
+				textured_batches,
+				untextured_batches,
+				min_alpha,
+				max_alpha,
+				min_x,
+				max_x,
+				min_y,
+				max_y,
+				g_raster_fullscreen_cover ? "yes" : "no",
+				RT::g_mtl.viewport_width,
+				RT::g_mtl.viewport_height,
+				(unsigned long)target_width,
+				(unsigned long)target_height);
+			g_last_raster_log_time = now;
+		}
 	}
 }
 
@@ -482,12 +494,30 @@ namespace RenderBackend
 					drawable_size.height);
 				g_last_frame_log_time = now;
 			}
+			if (now - g_last_line_log_time >= 1.0)
+			{
+				if (g_raster_line_calls > 0)
+				{
+					MTL_LOG("Raster lines: calls=%llu verts=%llu",
+						(unsigned long long)g_raster_line_calls,
+						(unsigned long long)g_raster_line_vertices);
+				}
+				g_raster_line_calls = 0;
+				g_raster_line_vertices = 0;
+				g_last_line_log_time = now;
+			}
+			bool should_clear = true;
+			if (had_raster_batches)
+				should_clear = g_raster_fullscreen_cover;
+			else if (had_imgui)
+				should_clear = false;
+
 			id<CAMetalDrawable> drawable = [g_mtl.metal_layer nextDrawable];
 			if (drawable)
 			{
 				MTLRenderPassDescriptor* passDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
 				passDescriptor.colorAttachments[0].texture = drawable.texture;
-				passDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
+				passDescriptor.colorAttachments[0].loadAction = should_clear ? MTLLoadActionClear : MTLLoadActionLoad;
 				passDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
 				passDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.392, 0.584, 0.929, 1.0); // Cornflower Blue
 
@@ -770,8 +800,20 @@ namespace RenderBackend
 			}
 		}
 	}
-	void RasterLines(RT_RasterLineVertex* vertices, uint32_t num_vertices) { MTL_STUB("RasterLines"); }
-	void RasterLinesWorld(RT_RasterLineVertex* vertices, uint32_t num_vertices) { MTL_STUB("RasterLinesWorld"); }
+	void RasterLines(RT_RasterLineVertex* vertices, uint32_t num_vertices)
+	{
+		(void)vertices;
+		g_raster_line_calls++;
+		g_raster_line_vertices += num_vertices;
+		MTL_STUB("RasterLines");
+	}
+	void RasterLinesWorld(RT_RasterLineVertex* vertices, uint32_t num_vertices)
+	{
+		(void)vertices;
+		g_raster_line_calls++;
+		g_raster_line_vertices += num_vertices;
+		MTL_STUB("RasterLinesWorld");
+	}
 	void RasterRender()
 	{
 		if (g_mtl.raster_render_target && !g_raster_batches.empty() && g_mtl.raster_tri_pipeline)
