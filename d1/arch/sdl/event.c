@@ -241,6 +241,19 @@ void RT_Event_Poll(ImGuiIO* io, SDL_Event* ev, int* clean_uniframe, int* idle)
 			break;
 #endif
 
+#if defined(SDL_TEXTINPUT)
+		case SDL_TEXTINPUT:
+			idle = 0;
+			{
+				const unsigned char* text = (const unsigned char*)event.text.text;
+				while (*text)
+				{
+					ImGuiIO_AddInputCharacter(io, *text++);
+				}
+			}
+			break;
+#endif
+
 		case SDL_ACTIVEEVENT:
 		{
 			Uint8 window_event = event.active.state;
