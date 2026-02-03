@@ -17,6 +17,13 @@
 namespace RT
 {
 
+	// Minimal stub — the DX12 backend generates this from shared shader headers.
+	// Metal will get its own tweak vars once shaders are implemented.
+	struct TweakVars
+	{
+		int placeholder;
+	};
+
 	extern TweakVars tweak_vars;
 
 	constexpr uint32_t BACK_BUFFER_COUNT      = 3;
