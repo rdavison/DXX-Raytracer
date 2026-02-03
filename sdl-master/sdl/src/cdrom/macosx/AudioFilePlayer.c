@@ -116,7 +116,7 @@ static AudioUnit AudioFilePlayer_GetDestUnit(AudioFilePlayer *afp)
 static void AudioFilePlayer_Print(AudioFilePlayer *afp)
 {
 #if DEBUG    
-    printf ("Is Connected:%s\n", (IsConnected() ? "true" : "false"));
+    printf ("Is Connected:%s\n", (AudioFilePlayer_IsConnected(afp) ? "true" : "false"));
     printf ("- - - - - - - - - - - - - - \n");
 #endif
 }
@@ -357,4 +357,3 @@ AudioFilePlayer *new_AudioFilePlayer (const FSRef *inFileRef)
 
     return afp;
 }
-
