@@ -10,6 +10,9 @@
 #include "cimgui.h"
 #include "imgui_impl_metal.h"
 #include <math.h>
+#include "Core/Config.h"
+
+#define RT_RENDER_SETTINGS_CONFIG_FILE "render_settings.vars"
 
 RT_MaterialEdge g_rt_material_edges[RT_MAX_MATERIAL_EDGES];
 uint16_t        g_rt_material_indices[RT_MAX_MATERIALS];
@@ -70,6 +73,10 @@ namespace RenderBackend
 		g_mtl.imgui_draw_data = nullptr;
 		g_mtl.imgui_last_scale_x = 0.0f;
 		g_mtl.imgui_last_scale_y = 0.0f;
+
+		g_mtl.io.config = RT_ArenaAllocStructNoZero(g_mtl.arena, RT_Config);
+		RT_InitializeConfig(g_mtl.io.config, g_mtl.arena);
+		RT_DeserializeConfigFromFile(g_mtl.io.config, RT_RENDER_SETTINGS_CONFIG_FILE);
 		
 		// Init IO
 		// g_mtl.io.config = ... (similar to DX12?) 
@@ -247,7 +254,31 @@ namespace RenderBackend
 
 	void DoDebugMenus(const RT_DoRendererDebugMenuParams *params)
 	{
-		MTL_STUB("DoDebugMenus");
+		if (!params || !params->ui_has_cursor_focus)
+			return;
+
+		if (ImGui::Begin("Render Settings"))
+		{
+			if (ImGui::Button("Load Settings"))
+			{
+				if (g_mtl.io.config)
+					RT_DeserializeConfigFromFile(g_mtl.io.config, RT_RENDER_SETTINGS_CONFIG_FILE);
+			}
+
+			ImGui::SameLine();
+
+			if (ImGui::Button("Save Settings"))
+			{
+				if (g_mtl.io.config)
+					RT_SerializeConfigToFile(g_mtl.io.config, (char *)RT_RENDER_SETTINGS_CONFIG_FILE);
+			}
+
+			ImGui::Separator();
+			ImGui::Checkbox("Debug Line Depth", &g_mtl.io.debug_line_depth_enabled);
+			ImGui::SliderInt("Debug Render Mode", &g_mtl.io.debug_render_mode, 0, 3);
+			ImGui::Text("Delta Time: %.3f", g_mtl.io.delta_time);
+		}
+		ImGui::End();
 	}
 
 	RT_ResourceHandle UploadTexture(const RT_UploadTextureParams& texture_params)
