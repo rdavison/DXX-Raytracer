@@ -8,6 +8,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "cimgui.h"
+#include "imgui_impl_metal.h"
 
 RT_MaterialEdge g_rt_material_edges[RT_MAX_MATERIAL_EDGES];
 uint16_t        g_rt_material_indices[RT_MAX_MATERIALS];
@@ -42,6 +43,7 @@ namespace RenderBackend
 		}
 
 		g_mtl.command_queue = [g_mtl.device newCommandQueue];
+		ImGui_ImplMetal_Init(g_mtl.device);
 
 		NSView* view = [window contentView];
 		[view setWantsLayer:YES];
@@ -76,6 +78,7 @@ namespace RenderBackend
 	void Exit()
 	{
 		MTL_LOG("Shutting down Metal backend");
+		ImGui_ImplMetal_Shutdown();
 		g_mtl.metal_layer = nil;
 		g_mtl.command_queue = nil;
 		g_mtl.device = nil;
@@ -121,6 +124,11 @@ namespace RenderBackend
 
 				id<MTLCommandBuffer> commandBuffer = [g_mtl.command_queue commandBuffer];
 				
+				if (g_mtl.imgui_render_requested && g_mtl.imgui_draw_data)
+				{
+					ImGui_ImplMetal_NewFrame(passDescriptor);
+				}
+
 				id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
 				if (g_mtl.imgui_render_requested && g_mtl.imgui_draw_data)
 				{
