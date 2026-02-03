@@ -134,6 +134,7 @@ static id<MTLTexture> CreateWhiteTexture(id<MTLDevice> device)
 
 static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder, NSUInteger target_width, NSUInteger target_height)
 {
+	static bool logged_raster_batches = false;
 	if (!renderEncoder || g_raster_batches.empty())
 		return;
 
@@ -181,6 +182,12 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder, NSUIn
 		[renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle
 						   vertexStart:0
 						   vertexCount:(NSUInteger)batch.vertices.size()];
+	}
+
+	if (!logged_raster_batches)
+	{
+		MTL_LOG("Raster batches rendered (%zu)", g_raster_batches.size());
+		logged_raster_batches = true;
 	}
 }
 
