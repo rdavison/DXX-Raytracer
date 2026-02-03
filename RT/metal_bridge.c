@@ -9,6 +9,7 @@
 #include "gamefont.h"
 #include "grdef.h"
 #include "globvars.h"
+#include "SDL.h"
 
 int get_centered_x(const char *s);
 void get_char_width(ubyte c, ubyte c2, int *width, int *spacing);
@@ -33,6 +34,7 @@ unsigned char whitepyro_tex2[8] = { 255, 144, 255, 144, 226, 144, 224, 255 };
 const float kPi = 3.14159265f;
 
 RT_Mat4 projection_matrix;
+static double g_last_frame_log_time = 0.0;
 
 void metal_start_frame()
 {
@@ -43,6 +45,23 @@ void metal_start_frame()
 	RT_RasterSetViewport(0.0f, 0.0f, grd_curscreen->sc_w, grd_curscreen->sc_h);
 
 	projection_matrix = RT_Mat4Perspective(RT_RadiansFromDegrees(90.0f), 1.0f, 0.1f, 5000.0f);
+
+	{
+		double now = (double)SDL_GetTicks() / 1000.0;
+		if (now - g_last_frame_log_time >= 1.0)
+		{
+			RT_LOGF(RT_LOGSERVERITY_INFO,
+				"[Metal] Frame: last=%dx%d screen=%dx%d canvas=%dx%d viewport=%.0fx%.0f fnt=%d/%d",
+				last_width, last_height,
+				grd_curscreen->sc_w, grd_curscreen->sc_h,
+				grd_curcanv ? grd_curcanv->cv_bitmap.bm_w : 0,
+				grd_curcanv ? grd_curcanv->cv_bitmap.bm_h : 0,
+				grd_curscreen ? (float)grd_curscreen->sc_w : 0.0f,
+				grd_curscreen ? (float)grd_curscreen->sc_h : 0.0f,
+				FNTScaleX, FNTScaleY);
+			g_last_frame_log_time = now;
+		}
+	}
 }
 
 void metal_end_frame()

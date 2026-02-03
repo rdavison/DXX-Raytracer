@@ -23,6 +23,7 @@ struct RasterBatch
 };
 
 static std::vector<RasterBatch> g_raster_batches;
+static double g_last_raster_log_time = 0.0;
 
 static id<MTLRenderPipelineState> CreateRasterTriPipeline(id<MTLDevice> device)
 {
@@ -209,6 +210,18 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
 	{
 		MTL_LOG("Raster batches rendered (%zu)", g_raster_batches.size());
 		logged_raster_batches = true;
+	}
+
+	double now = CFAbsoluteTimeGetCurrent();
+	if (now - g_last_raster_log_time >= 1.0)
+	{
+		MTL_LOG("Raster batches this frame: %zu (viewport %.0fx%.0f, target %lux%lu)",
+			g_raster_batches.size(),
+			RT::g_mtl.viewport_width,
+			RT::g_mtl.viewport_height,
+			(unsigned long)target_width,
+			(unsigned long)target_height);
+		g_last_raster_log_time = now;
 	}
 }
 
