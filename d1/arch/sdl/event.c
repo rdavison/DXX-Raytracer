@@ -185,6 +185,7 @@ void RT_Event_Poll(ImGuiIO* io, SDL_Event* ev, int* clean_uniframe, int* idle)
 				{
 					ImGuiIO_AddKeyEvent(io, mod, (event.key.type == SDL_KEYDOWN));
 				}
+				RT_SDL_UpdateKeyModifier(io, event.key.keysym.mod);
 
 				ImGuiIO_AddKeyEvent(io, key, (event.key.type == SDL_KEYDOWN));
 
