@@ -326,6 +326,21 @@ void event_poll()
 #endif //RT_DX12
 	}
 
+#if defined(RT_DX12) || defined(RT_METAL)
+	{
+		ImGuiIO* io = igGetIO();
+		int mouse_x = 0;
+		int mouse_y = 0;
+		Uint8 mouse_buttons = SDL_GetMouseState(&mouse_x, &mouse_y);
+		ImGuiIO_AddMousePosEvent(io, (float)mouse_x, (float)mouse_y);
+		ImGuiIO_AddMouseButtonEvent(io, 0, (mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0);
+		ImGuiIO_AddMouseButtonEvent(io, 1, (mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0);
+		ImGuiIO_AddMouseButtonEvent(io, 2, (mouse_buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE)) != 0);
+		ImGuiIO_AddMouseButtonEvent(io, 3, (mouse_buttons & SDL_BUTTON(SDL_BUTTON_X1)) != 0);
+		ImGuiIO_AddMouseButtonEvent(io, 4, (mouse_buttons & SDL_BUTTON(SDL_BUTTON_X2)) != 0);
+	}
+#endif
+
 	// Send the idle event if there were no other events
 	if (idle)
 	{
@@ -450,4 +465,3 @@ fix event_get_idle_seconds()
 {
 	return (timer_query() - last_event)/F1_0;
 }
-
