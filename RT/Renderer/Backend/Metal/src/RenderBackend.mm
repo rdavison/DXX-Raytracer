@@ -124,6 +124,7 @@ namespace RenderBackend
 	void EndFrame()
 	{
 		@autoreleasepool {
+			static bool logged_imgui_render = false;
 			{
 				NSView* view = [g_mtl.window contentView];
 				if (view)
@@ -199,6 +200,11 @@ namespace RenderBackend
 				{
 					// ImGui overlay pass (after scene, before present) into the swapchain render pass.
 					ImGui_ImplMetal_RenderDrawData(g_mtl.imgui_draw_data, commandBuffer, renderEncoder);
+					if (!logged_imgui_render)
+					{
+						MTL_LOG("ImGui draw data rendered");
+						logged_imgui_render = true;
+					}
 				}
 				[renderEncoder endEncoding];
 
