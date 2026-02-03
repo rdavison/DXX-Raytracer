@@ -44,6 +44,7 @@ namespace RenderBackend
 
 		g_mtl.command_queue = [g_mtl.device newCommandQueue];
 		ImGui_ImplMetal_Init(g_mtl.device);
+		ImGui_ImplMetal_CreateDeviceObjects(g_mtl.device);
 
 		NSView* view = [window contentView];
 		[view setWantsLayer:YES];
