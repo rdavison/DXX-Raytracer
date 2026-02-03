@@ -402,7 +402,7 @@ namespace RenderBackend
 				}
 
 				id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
-				if (g_mtl.raster_render_requested && !g_raster_batches.empty() && g_mtl.raster_tri_pipeline)
+				if (!g_raster_batches.empty() && g_mtl.raster_tri_pipeline)
 				{
 					EncodeRasterBatches(renderEncoder, drawable.texture.width, drawable.texture.height, false);
 				}
