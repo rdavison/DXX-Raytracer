@@ -13,8 +13,13 @@
 
 #ifndef __cplusplus
 
+#ifdef _WIN32
 #define RT_API extern 
 #define RT_EXPORT extern __declspec(dllexport)
+#else
+#define RT_API extern
+#define RT_EXPORT extern __attribute__((visibility("default")))
+#endif
 
 // C doesn't have a built-in bool type, but it does have _Bool (which is the same thing). This awesome header defines bool as a macro. Cool.
 #include <stdbool.h>
@@ -26,14 +31,23 @@
 #endif
 
 #ifndef thread_local
+#ifdef _WIN32
 // MSVC does not implement _Thread_local for C even though they have __declspec(thread) which is the same thing!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 #define thread_local __declspec(thread)
+#else
+#define thread_local _Thread_local
+#endif
 #endif
 
 #else
 
+#ifdef _WIN32
 #define RT_API extern "C" 
 #define RT_EXPORT extern "C" __declspec(dllexport)
+#else
+#define RT_API extern "C"
+#define RT_EXPORT extern "C" __attribute__((visibility("default")))
+#endif
 
 #endif
 
