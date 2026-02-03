@@ -374,6 +374,15 @@ void event_poll()
 		ImGuiIO_AddMouseButtonEvent(io, 4, (mouse_buttons & SDL_BUTTON(SDL_BUTTON_X2)) != 0);
 
 		{
+			SDL_Surface* surface = SDL_GetVideoSurface();
+			if (surface)
+			{
+				io->DisplaySize.x = (float)surface->w;
+				io->DisplaySize.y = (float)surface->h;
+			}
+		}
+
+		{
 			static Uint32 last_ticks = 0;
 			Uint32 current_ticks = SDL_GetTicks();
 
