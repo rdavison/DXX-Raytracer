@@ -83,6 +83,10 @@ namespace RenderBackend
 		g_mtl.imgui_draw_data = nullptr;
 		g_mtl.imgui_last_scale_x = 0.0f;
 		g_mtl.imgui_last_scale_y = 0.0f;
+		g_mtl.viewport_x = 0.0f;
+		g_mtl.viewport_y = 0.0f;
+		g_mtl.viewport_width = 0.0f;
+		g_mtl.viewport_height = 0.0f;
 
 		g_mtl.io.config = RT_ArenaAllocStructNoZero(g_mtl.arena, RT_Config);
 		RT_InitializeConfig(g_mtl.io.config, g_mtl.arena);
@@ -343,7 +347,13 @@ namespace RenderBackend
 	void RaytraceSetSkyColors(RT_Vec3 top, RT_Vec3 bottom) { MTL_STUB("RaytraceSetSkyColors"); }
 
 	// Rasterization stubs
-	void RasterSetViewport(float x, float y, float width, float height) { MTL_STUB("RasterSetViewport"); }
+	void RasterSetViewport(float x, float y, float width, float height)
+	{
+		g_mtl.viewport_x = x;
+		g_mtl.viewport_y = y;
+		g_mtl.viewport_width = width;
+		g_mtl.viewport_height = height;
+	}
 	void RasterSetRenderTarget(RT_ResourceHandle texture) { MTL_STUB("RasterSetRenderTarget"); }
 	void RasterTriangles(RT_RasterTrianglesParams* params, uint32_t num_params) { MTL_STUB("RasterTriangles"); }
 	void RasterLines(RT_RasterLineVertex* vertices, uint32_t num_vertices) { MTL_STUB("RasterLines"); }

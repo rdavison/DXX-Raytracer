@@ -128,6 +128,10 @@ namespace RT
 		bool  queued_screenshot;
 		char  queued_screenshot_name[1024];
 		float viewport_offset_y;
+		float viewport_x;
+		float viewport_y;
+		float viewport_width;
+		float viewport_height;
 		bool  imgui_render_requested;
 		::ImDrawData *imgui_draw_data;
 		float imgui_last_scale_x;
