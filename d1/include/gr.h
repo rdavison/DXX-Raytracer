@@ -23,6 +23,11 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "pstypes.h"
 #include "fix.h"
 
+#if defined(RT_METAL)
+#include "ApiTypes.h"
+#include "Core/MiniMath.h"
+#endif
+
 extern int HiresGFXAvailable;
 
 // some defines for transparency and blending

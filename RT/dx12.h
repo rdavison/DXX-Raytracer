@@ -1,6 +1,10 @@
 #ifndef _DX_12_H
 #define _DX_12_H
 
+#if defined(RT_METAL)
+#include "metal_bridge.h"
+#else
+
 #include "ApiTypes.h"
 #include "Renderer.h"
 
@@ -25,5 +29,7 @@ void dx12_init_font(grs_font* font);
 uint32_t* dx12_load_bitmap_pixel_data(RT_Arena* arena, grs_bitmap* bitmap);
 bool dx12_ubitmapm_cs(int x, int y, int dw, int dh, grs_bitmap* bm, int c, int scale);
 bool dx12_ubitblt(int dw, int dh, int dx, int dy, int sw, int sh, int sx, int sy, grs_bitmap* src, grs_bitmap* dst, int texfilt);
+
+#endif // RT_METAL
 
 #endif //_DX_12_H
