@@ -32,6 +32,26 @@ set(Graphic_Includes
 set (Graphic_Libs
 Renderer
 )
+elseif(${GRAPHICS_API} STREQUAL "Metal")
+set(Graphic_Includes
+	"$ENV{RT_EXT_CODE_DIR}/RTgr.c"
+	"$ENV{RT_EXT_CODE_DIR}/RTgr.h"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Level.h"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Level.c"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Lights.h"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Lights.c"
+	"$ENV{RT_EXT_CODE_DIR}/metal_bridge.c"
+	"$ENV{RT_EXT_CODE_DIR}/metal_bridge.h"
+	"$ENV{RT_EXT_CODE_DIR}/polymodel_viewer.cpp"
+	"$ENV{RT_EXT_CODE_DIR}/polymodel_viewer.h"
+	"$ENV{RT_EXT_CODE_DIR}/material_viewer.cpp"
+	"$ENV{RT_EXT_CODE_DIR}/material_viewer.h"
+	"$ENV{RT_EXT_CODE_DIR}/RTmaterials.c"
+	"$ENV{RT_EXT_CODE_DIR}/RTmaterials.h"
+)
+set (Graphic_Libs
+Renderer
+)
 elseif(${GRAPHICS_API} STREQUAL "OpenGL")
 set(Graphic_Includes
 	"arch/ogl/gr.c"
@@ -53,7 +73,7 @@ file(GLOB UI_SOURCES
 )
 endif()
 
-if(CMAKE_BUILD_TYPE MATCHES Release)
+if(CMAKE_BUILD_TYPE MATCHES Release AND WIN32)
 #disable console on release.
 add_executable(descent1 WIN32)
 else()
@@ -216,12 +236,22 @@ target_link_libraries(descent1
 physfs-static
 sdlmain
 sdl
+${Graphic_Libs}
+)
+
+if (WIN32)
+target_link_libraries(descent1 
 dxguid
 Winmm
 Ws2_32
 dinput8
-${Graphic_Libs}
 )
+elseif(APPLE)
+target_link_libraries(descent1
+"-framework Cocoa"
+"-framework IOKit"
+)
+endif()
 
 install(TARGETS descent1             
 			RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
