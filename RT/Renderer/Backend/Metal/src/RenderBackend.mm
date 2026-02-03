@@ -360,7 +360,7 @@ namespace RenderBackend
 		{
 			start_time_seconds = CFAbsoluteTimeGetCurrent();
 		}
-		if (CFAbsoluteTimeGetCurrent() - start_time_seconds >= 10.0)
+		if (CFAbsoluteTimeGetCurrent() - start_time_seconds >= 15.0)
 		{
 			exit(0);
 		}
