@@ -10,6 +10,8 @@
 #include "cimgui.h"
 #include "imgui_impl_metal.h"
 #include <math.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <cstdlib>
 #include "Core/Config.h"
 #include <vector>
 #include <stddef.h>
@@ -353,6 +355,16 @@ namespace RenderBackend
 
 	void EndFrame()
 	{
+		static double start_time_seconds = 0.0;
+		if (start_time_seconds == 0.0)
+		{
+			start_time_seconds = CFAbsoluteTimeGetCurrent();
+		}
+		if (CFAbsoluteTimeGetCurrent() - start_time_seconds >= 10.0)
+		{
+			exit(0);
+		}
+
 		@autoreleasepool {
 			static bool logged_imgui_render = false;
 			{
