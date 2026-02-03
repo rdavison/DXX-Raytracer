@@ -132,6 +132,17 @@ namespace RT
 		float viewport_y;
 		float viewport_width;
 		float viewport_height;
+		bool  raster_render_requested;
+
+#ifdef __OBJC__
+		id<MTLRenderPipelineState> raster_tri_pipeline;
+		id<MTLSamplerState> raster_sampler;
+		id<MTLTexture> raster_white_texture;
+#else
+		id raster_tri_pipeline;
+		id raster_sampler;
+		id raster_white_texture;
+#endif
 		bool  imgui_render_requested;
 		::ImDrawData *imgui_draw_data;
 		float imgui_last_scale_x;

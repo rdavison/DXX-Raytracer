@@ -12,6 +12,7 @@
 #include <math.h>
 #include "Core/Config.h"
 #include <vector>
+#include <stddef.h>
 
 struct RasterBatch
 {
@@ -20,6 +21,116 @@ struct RasterBatch
 };
 
 static std::vector<RasterBatch> g_raster_batches;
+
+static id<MTLRenderPipelineState> CreateRasterTriPipeline(id<MTLDevice> device)
+{
+	static const char* kRasterTriShader = R"metal(
+#include <metal_stdlib>
+using namespace metal;
+
+struct VertexIn
+{
+	float3 pos [[attribute(0)]];
+	float2 uv [[attribute(1)]];
+	float4 color [[attribute(2)]];
+	uint texture_index [[attribute(3)]];
+};
+
+struct VertexOut
+{
+	float4 position [[position]];
+	float2 uv;
+	float4 color;
+};
+
+vertex VertexOut raster_vs(VertexIn in [[stage_in]])
+{
+	VertexOut out;
+	out.position = float4(in.pos, 1.0);
+	out.uv = in.uv;
+	out.color = in.color;
+	return out;
+}
+
+fragment float4 raster_fs(VertexOut in [[stage_in]],
+						  texture2d<float> tex [[texture(0)]],
+						  sampler samp [[sampler(0)]])
+{
+	float4 sampled = tex.sample(samp, in.uv);
+	return sampled * in.color;
+}
+)metal";
+
+	NSError* error = nil;
+	NSString* source = [NSString stringWithUTF8String:kRasterTriShader];
+	MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
+	id<MTLLibrary> library = [device newLibraryWithSource:source options:options error:&error];
+	if (!library)
+	{
+		MTL_LOG("Failed to compile raster shader: %s", error.localizedDescription.UTF8String);
+		return nil;
+	}
+
+	id<MTLFunction> vs = [library newFunctionWithName:@"raster_vs"];
+	id<MTLFunction> fs = [library newFunctionWithName:@"raster_fs"];
+	if (!vs || !fs)
+	{
+		MTL_LOG("Failed to find raster shader functions");
+		return nil;
+	}
+
+	MTLVertexDescriptor* vertex_desc = [[MTLVertexDescriptor alloc] init];
+	vertex_desc.attributes[0].format = MTLVertexFormatFloat3;
+	vertex_desc.attributes[0].offset = offsetof(RT_RasterTriVertex, pos);
+	vertex_desc.attributes[0].bufferIndex = 0;
+	vertex_desc.attributes[1].format = MTLVertexFormatFloat2;
+	vertex_desc.attributes[1].offset = offsetof(RT_RasterTriVertex, uv);
+	vertex_desc.attributes[1].bufferIndex = 0;
+	vertex_desc.attributes[2].format = MTLVertexFormatFloat4;
+	vertex_desc.attributes[2].offset = offsetof(RT_RasterTriVertex, color);
+	vertex_desc.attributes[2].bufferIndex = 0;
+	vertex_desc.attributes[3].format = MTLVertexFormatUInt;
+	vertex_desc.attributes[3].offset = offsetof(RT_RasterTriVertex, texture_index);
+	vertex_desc.attributes[3].bufferIndex = 0;
+	vertex_desc.layouts[0].stride = sizeof(RT_RasterTriVertex);
+	vertex_desc.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+
+	MTLRenderPipelineDescriptor* pipeline_desc = [[MTLRenderPipelineDescriptor alloc] init];
+	pipeline_desc.vertexFunction = vs;
+	pipeline_desc.fragmentFunction = fs;
+	pipeline_desc.vertexDescriptor = vertex_desc;
+	pipeline_desc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+	pipeline_desc.colorAttachments[0].blendingEnabled = YES;
+	pipeline_desc.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+	pipeline_desc.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+	pipeline_desc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+	pipeline_desc.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorSourceAlpha;
+	pipeline_desc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+	pipeline_desc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+
+	id<MTLRenderPipelineState> pipeline = [device newRenderPipelineStateWithDescriptor:pipeline_desc error:&error];
+	if (!pipeline)
+	{
+		MTL_LOG("Failed to create raster pipeline: %s", error.localizedDescription.UTF8String);
+	}
+	return pipeline;
+}
+
+static id<MTLTexture> CreateWhiteTexture(id<MTLDevice> device)
+{
+	MTLTextureDescriptor* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+																					width:1
+																				   height:1
+																				mipmapped:NO];
+	id<MTLTexture> texture = [device newTextureWithDescriptor:desc];
+	if (texture)
+	{
+		uint32_t white = 0xFFFFFFFFu;
+		MTLRegion region = { {0, 0, 0}, {1, 1, 1} };
+		[texture replaceRegion:region mipmapLevel:0 withBytes:&white bytesPerRow:4];
+	}
+	return texture;
+}
 
 #define RT_RENDER_SETTINGS_CONFIG_FILE "render_settings.vars"
 
@@ -96,6 +207,16 @@ namespace RenderBackend
 		g_mtl.viewport_y = 0.0f;
 		g_mtl.viewport_width = 0.0f;
 		g_mtl.viewport_height = 0.0f;
+		g_mtl.raster_render_requested = false;
+		g_mtl.raster_tri_pipeline = CreateRasterTriPipeline(g_mtl.device);
+
+		MTLSamplerDescriptor* sampler_desc = [[MTLSamplerDescriptor alloc] init];
+		sampler_desc.minFilter = MTLSamplerMinMagFilterLinear;
+		sampler_desc.magFilter = MTLSamplerMinMagFilterLinear;
+		sampler_desc.sAddressMode = MTLSamplerAddressModeClampToEdge;
+		sampler_desc.tAddressMode = MTLSamplerAddressModeClampToEdge;
+		g_mtl.raster_sampler = [g_mtl.device newSamplerStateWithDescriptor:sampler_desc];
+		g_mtl.raster_white_texture = CreateWhiteTexture(g_mtl.device);
 
 		g_mtl.io.config = RT_ArenaAllocStructNoZero(g_mtl.arena, RT_Config);
 		RT_InitializeConfig(g_mtl.io.config, g_mtl.arena);
@@ -219,6 +340,54 @@ namespace RenderBackend
 				}
 
 				id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
+				if (g_mtl.raster_render_requested && !g_raster_batches.empty() && g_mtl.raster_tri_pipeline)
+				{
+					MTLViewport viewport;
+					if (g_mtl.viewport_width > 0.0f && g_mtl.viewport_height > 0.0f)
+					{
+						viewport.originX = g_mtl.viewport_x;
+						viewport.originY = g_mtl.viewport_y;
+						viewport.width = g_mtl.viewport_width;
+						viewport.height = g_mtl.viewport_height;
+					}
+					else
+					{
+						viewport.originX = 0.0;
+						viewport.originY = 0.0;
+						viewport.width = drawable.texture.width;
+						viewport.height = drawable.texture.height;
+					}
+					viewport.znear = 0.0;
+					viewport.zfar = 1.0;
+					[renderEncoder setViewport:viewport];
+
+					MTLScissorRect scissor;
+					scissor.x = (NSUInteger)viewport.originX;
+					scissor.y = (NSUInteger)viewport.originY;
+					scissor.width = (NSUInteger)viewport.width;
+					scissor.height = (NSUInteger)viewport.height;
+					[renderEncoder setScissorRect:scissor];
+
+					[renderEncoder setRenderPipelineState:g_mtl.raster_tri_pipeline];
+					[renderEncoder setFragmentSamplerState:g_mtl.raster_sampler atIndex:0];
+
+					for (const RasterBatch& batch : g_raster_batches)
+					{
+						id<MTLTexture> texture = g_mtl.raster_white_texture;
+						TextureResource* tex_res = g_texture_slotmap.Find(batch.texture);
+						if (tex_res && tex_res->texture)
+							texture = tex_res->texture;
+
+						id<MTLBuffer> vb = [g_mtl.device newBufferWithBytes:batch.vertices.data()
+																	 length:batch.vertices.size() * sizeof(RT_RasterTriVertex)
+																	options:MTLResourceStorageModeShared];
+						[renderEncoder setVertexBuffer:vb offset:0 atIndex:0];
+						[renderEncoder setFragmentTexture:texture atIndex:0];
+						[renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+										   vertexStart:0
+										   vertexCount:(NSUInteger)batch.vertices.size()];
+					}
+				}
 				if (g_mtl.imgui_render_requested && g_mtl.imgui_draw_data)
 				{
 					// ImGui overlay pass (after scene, before present) into the swapchain render pass.
@@ -253,6 +422,8 @@ namespace RenderBackend
 		g_mtl.current_back_buffer_index = (g_mtl.current_back_buffer_index + 1) % BACK_BUFFER_COUNT;
 		g_mtl.imgui_render_requested = false;
 		g_mtl.imgui_draw_data = nullptr;
+		g_mtl.raster_render_requested = false;
+		g_raster_batches.clear();
 	}
 
 	void SwapBuffers()
@@ -383,7 +554,10 @@ namespace RenderBackend
 	}
 	void RasterLines(RT_RasterLineVertex* vertices, uint32_t num_vertices) { MTL_STUB("RasterLines"); }
 	void RasterLinesWorld(RT_RasterLineVertex* vertices, uint32_t num_vertices) { MTL_STUB("RasterLinesWorld"); }
-	void RasterRender() { MTL_STUB("RasterRender"); }
+	void RasterRender()
+	{
+		g_mtl.raster_render_requested = true;
+	}
 	void RasterRenderDebugLines() { MTL_STUB("RasterRenderDebugLines"); }
 	void RasterBlitScene(const RT_Vec2* top_left, const RT_Vec2* bottom_right, bool blit_blend) { MTL_STUB("RasterBlitScene"); }
 	void RasterBlit(RT_ResourceHandle src, const RT_Vec2* top_left, const RT_Vec2* bottom_right, bool blit_blend) { MTL_STUB("RasterBlit"); }
