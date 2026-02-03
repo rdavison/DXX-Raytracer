@@ -62,7 +62,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "ogl_init.h"
 #endif
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "dx12.h"
 #include "RTutil.h"
 #include "Core/Arena.h"
@@ -317,7 +317,7 @@ void start_endlevel_sequence()
 
 	flash_scale = f1_0;
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	g_light_multiplier = g_light_multiplier_default; //Needs to be changed to RTconfig
 	g_pending_light_update = true;
 	RT_ResetLightEmission();
@@ -411,7 +411,7 @@ void stop_endlevel_sequence()
 
 	Endlevel_sequence = EL_OFF;
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	RT_RaytraceSetSkyColors(RT_Vec3Make(0.0, 0.0, 0.0), RT_Vec3Make(0.0, 0.0, 0.0));
 #endif
 
@@ -874,7 +874,7 @@ void render_external_scene(fix eye_offset)
 	g3_set_view_matrix(&Viewer->pos,&Viewer->orient,Render_zoom);
 
 	//g3_draw_horizon(BM_XRGB(0,0,0),BM_XRGB(16,16,16));		//,-1);
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
     gr_clear_canvas(BM_XRGB(0,0,0));
 #endif
 
@@ -899,7 +899,7 @@ void render_external_scene(fix eye_offset)
 			if (! (p.p3_flags & PF_OVERFLOW)) {
 				Interpolation_method = 0;
 				//gr_bitmapm(f2i(p.p3_sx)-32,f2i(p.p3_sy)-32,satellite_bitmap);
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 				RT_Vec3 bot = RT_Vec3Fromvms_vector(&p.p3_vec);
 				RT_Vec3 top = RT_Vec3Fromvms_vector(&top_pnt.p3_vec);
 				RT_Vec3 mid = RT_Vec3Muls(RT_Vec3Add(bot, top), 0.5f);
@@ -1050,7 +1050,7 @@ void endlevel_render_mine(fix eye_offset)
 		g3_set_view_matrix(&Viewer_eye,&Viewer->orient,Render_zoom);
 
 	render_mine(start_seg_num, eye_offset);
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
     RT_Vec3 player_pos = RT_Vec3Fromvms_vector(&Viewer->pos);
     RT_RenderLevel(player_pos);
 #endif
@@ -1061,7 +1061,7 @@ void render_endlevel_frame(fix eye_offset)
 
 	g3_start_frame();
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	RT_Camera camera =
 	{
 		.position = RT_Vec3Fromvms_vector(&Viewer->pos),
@@ -1087,7 +1087,7 @@ void render_endlevel_frame(fix eye_offset)
 	else
 		render_external_scene(eye_offset);
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	RT_EndScene();
 #endif
 	g3_end_frame();
@@ -1455,7 +1455,7 @@ try_again:
 
 				terrain_bitmap = &terrain_bm_instance;
 				gr_remap_bitmap_good( terrain_bitmap, pal, iff_transparent_color, -1);
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
                 // todo(lily): maybe make this compatible with external game textures instead of hardcoding?
                 // todo(lily): does this leak memory?
                 RT_ArenaMemoryScope(&g_thread_arena) {
@@ -1513,7 +1513,7 @@ try_again:
 				satellite_bitmap = &satellite_bm_instance;
 				gr_remap_bitmap_good( satellite_bitmap, pal, iff_transparent_color, -1);
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 				// todo(lily): maybe make this compatible with external game textures instead of hardcoding?
 				// todo(lily): does this leak memory?
 				RT_ArenaMemoryScope(&g_thread_arena) {

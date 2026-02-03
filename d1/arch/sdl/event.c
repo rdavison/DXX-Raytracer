@@ -18,7 +18,7 @@
 
 #include "joy.h"
 //I do not like doing ifdef's here.... ah well it is what it is.
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "RTgr.h"
 #endif //RT_DX12
 
@@ -32,7 +32,7 @@ extern void mouse_cursor_autohide();
 
 static int initialised=0;
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 
 #pragma pack (push, 8)
 ImGuiKey RT_SDLKeycodeToImGuiKey(int keycode)
@@ -279,7 +279,7 @@ void event_poll()
 	// like pressing 'Return' really fast at 'Difficulty Level' causing multiple games to be started
 	while ((wind == window_get_front()) && SDL_PollEvent(&event))
 	{
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 		ImGuiIO* io = igGetIO();
 
 		RT_Event_Poll(io, &event, &clean_uniframe, &idle);

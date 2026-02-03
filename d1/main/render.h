@@ -23,7 +23,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include "object.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 //TODO, remove this
 #include "Game/Level.h"
 #endif
@@ -47,7 +47,7 @@ extern int Max_debris_objects; // How many debris objects to create
 
 extern int Clear_window;    // 1 = Clear whole background window, 2 = clear view portals into rest of world, 0 = no clear
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 void RT_GetLevelGeomerty(RT_Index* verts_ids, RT_Vertex* verts, int* indices_count, int* verts_count);
 #endif
 void render_frame(fix eye_offset);		//draws the world into the current canvas

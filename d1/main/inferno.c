@@ -86,7 +86,7 @@ char copyright[] = "DESCENT   COPYRIGHT (C) 1994,1995 PARALLAX SOFTWARE CORPORAT
 #include "net_udp.h"
 #endif
 
-#if defined(RT_DX12)
+#if (defined(RT_DX12) || defined(RT_METAL))
 #include "Core/Arena.h"
 #endif
 

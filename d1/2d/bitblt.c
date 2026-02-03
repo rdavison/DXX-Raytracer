@@ -25,7 +25,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "dxxerror.h"
 #include "byteswap.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "dx12.h"
 #endif
 
@@ -373,7 +373,7 @@ void gr_bm_ubitblt(int w, int h, int dx, int dy, int sx, int sy, grs_bitmap * sr
 	}
 #endif
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	dx12_ubitblt(w, h, dx, dy, w, h, sx, sy, src, dest, 0);
 	return;
 #endif
@@ -615,7 +615,7 @@ void show_fullscr(grs_bitmap *bm)
 {
 	grs_bitmap * const scr = &grd_curcanv->cv_bitmap;
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	dx12_ubitmapm_cs(0, 0, -1, -1, bm, -1, F1_0);
 #elif OGL
 	if(bm->bm_type == BM_LINEAR && scr->bm_type == BM_OGL &&

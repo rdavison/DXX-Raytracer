@@ -1531,7 +1531,7 @@ int newmenu_handler(window *wind, d_event *event, newmenu *menu)
 			break;
 
 		case EVENT_WINDOW_DRAW:
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			RT_GetRendererIO()->delta_time = f2fl(FrameTime);
 			RT_BeginFrame();
 			RT_StartImGuiFrame();
@@ -1539,7 +1539,7 @@ int newmenu_handler(window *wind, d_event *event, newmenu *menu)
 
 			state = newmenu_draw(wind, menu);
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			RT_EndImguiFrame();
 			RT_EndFrame();
 #endif

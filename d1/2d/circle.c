@@ -47,7 +47,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "gr.h"
 #include "grdef.h"
 
-#if !defined(OGL) && !defined(RT_DX12)
+#if !defined(OGL) && (!defined(RT_DX12) && !defined(RT_METAL))
 
 int gr_circle(fix xc1,fix yc1,fix r1)
 {

@@ -35,7 +35,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "fireball.h"
 #include "logger.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "RTutil.h"
 #include "Core/Arena.h"
 #include "Core/MiniMath.h"
@@ -77,7 +77,7 @@ int org_i,org_j;
 
 int mine_tiles_drawn;    //flags to tell if all 4 tiles under mine have drawn
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 RT_ResourceHandle RT_TerrainMesh;
 #endif
 
@@ -177,7 +177,7 @@ int im=1;
 
 void render_terrain(vms_vector *org_point,int org_2dx,int org_2dy)
 {
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	//start_point = org_point + ((-(org_i-low_i)*grid_scale) * rvec) + ((-(org_j - low_j)*grid_scale) * fvec)
 	org_i = org_2dy; int low_i = 0;
 	org_j = org_2dx; int low_j = 0;
@@ -425,7 +425,7 @@ void load_terrain(char *filename)
 	terrain_bm = terrain_bitmap;
 
 	build_light_table();
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
     //printf("this is where the terrain gets generated\n");
     RT_ArenaMemoryScope(&g_thread_arena) {
         RT_Vec3* vertex_positions = RT_ArenaAllocArray(&g_thread_arena, grid_h * grid_w, RT_Vec3);

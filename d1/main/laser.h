@@ -101,7 +101,7 @@ typedef struct muzzle_info {
 	fix64       create_time;
 	short       segnum;
 	vms_vector  pos;
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	vms_vector	RT_muzzleColor;
 #endif
 } muzzle_info;

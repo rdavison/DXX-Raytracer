@@ -55,7 +55,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "editor/texpage.h"
 #endif
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "Core/MiniMath.h"
 #include "Core/Arena.h"
 #include "dx12.h"
@@ -137,7 +137,7 @@ int gamedata_init()
 
 	piggy_read_sounds(retval == PIGGY_PC_SHAREWARE);
 	
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	RT_InitAllPolyModels();
     RT_InitAllBitmaps();
 	RT_InitLightStuff();

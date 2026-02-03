@@ -771,7 +771,7 @@ int ogl_internal_string(int x, int y, const char *s )
 }
 
 int gr_internal_color_string(int x, int y, const char *s ){
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	return dx12_internal_string(x, y, s);
 #endif
 #ifdef OGL
@@ -818,7 +818,7 @@ int gr_string(int x, int y, const char *s )
 	}
 
 	// Partially clipped...
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	if (TYPE == BM_OGL)
 		return dx12_internal_string(x, y, s);
 #endif
@@ -838,7 +838,7 @@ int gr_string(int x, int y, const char *s )
 
 int gr_ustring(int x, int y, const char *s )
 {
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	if (TYPE==BM_OGL)
 		return dx12_internal_string(x, y, s);
 #endif
@@ -1078,7 +1078,7 @@ grs_font * gr_init_font( const char * fontname )
 	grd_curcanv->cv_font_fg_color    = 0;
 	grd_curcanv->cv_font_bg_color    = 0;
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	dx12_init_font(font);
 #endif
 #ifdef OGL

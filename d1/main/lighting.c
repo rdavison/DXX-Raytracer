@@ -45,7 +45,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "rle.h"
 #include "wall.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "RTgr.h"
 #include "Game/Lights.h"
 
@@ -221,7 +221,7 @@ void apply_light(g3s_lrgb obj_light_emission, int obj_seg, vms_vector *obj_pos, 
 #define FLASH_SCALE             (3*F1_0/FLASH_LEN_FIXED_SECONDS)
 
 // ----------------------------------------------------------------------------------------------
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
 void cast_muzzle_flash_light(int n_render_vertices, int *render_vertices, int *vert_segnum_list)
 #else
 void cast_muzzle_flash_light()
@@ -242,7 +242,7 @@ void cast_muzzle_flash_light()
 			{
 				g3s_lrgb ml;
 				ml.r = ml.g = ml.b = ((FLASH_LEN_FIXED_SECONDS - time_since_flash) * FLASH_SCALE);
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
 				apply_light(ml, Muzzle_data[i].segnum, &Muzzle_data[i].pos, n_render_vertices, render_vertices, vert_segnum_list, -1);
 #else
 				if (g_rt_dynamic_light_info.muzzleLights)
@@ -340,7 +340,7 @@ g3s_lrgb compute_light_emission(int objnum)
 	lemission.r = lemission.g = lemission.b = light_intensity;
 
 	//Note (SAM): yes we allow all pretty colors
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
 
 	if (!PlayerCfg.DynLightColor) // colored lights not desired so use intensity only OR no intensity (== no light == no color) at all
 		return lemission;
@@ -465,7 +465,7 @@ g3s_lrgb compute_light_emission(int objnum)
 	}
 
 	//Note (SAM): Intercept! maybe we can do this in a better way, but we do not want all lights.
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 
 		if (obj->type == OBJ_FLARE ||
 			obj->type == OBJ_FIREBALL ||
@@ -551,7 +551,7 @@ void set_dynamic_light(void)
 	if (!Do_dynamic_light)
 		return;
 
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
 	light_time += FrameTime;
 	if (light_time < (F1_0/60)) // it's enough to stress the CPU 60 times per second
 		return;
@@ -602,7 +602,7 @@ void set_dynamic_light(void)
 
 		obj_light_emission = compute_light_emission(objnum);
 
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
 		if (((obj_light_emission.r+obj_light_emission.g+obj_light_emission.b)/3) > 0)
 			apply_light(obj_light_emission, obj->segnum, objpos, n_render_vertices, render_vertices, vert_segnum_list, objnum);
 #endif

@@ -31,7 +31,7 @@ extern int RegisterPlayer();
 extern int DoMenu();
 extern void do_options_menu();
 extern int select_demo(void);
-#if RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #define Menu_pcx_name (PHYSFSX_exists("assets/splash-logo/MenuRaytraced.png", 1) ? \
 	"assets/splash-logo/MenuRaytraced.png" : \
 	(((SWIDTH>=640&&SHEIGHT>=480) && PHYSFSX_exists("menuh.pcx",1))?"menuh.pcx":"menu.pcx"))

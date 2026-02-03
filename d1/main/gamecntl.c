@@ -94,7 +94,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "editor/esegment.h"
 #endif
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "RTgr.h"
 #endif
 
@@ -519,7 +519,7 @@ int HandleSystemKey(int key)
 	switch (key)
 	{
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 		case KEY_SHIFTED + KEY_ALTED + KEY_F1:
 		{
 			g_rt_enable_debug_menu = !g_rt_enable_debug_menu;
@@ -591,7 +591,7 @@ int HandleSystemKey(int key)
 		KEY_MAC(case KEY_COMMAND+KEY_3:)
 		case KEY_F3:
 			if (!Player_is_dead) {
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 				if (g_rt_free_cam_info.g_free_cam_enabled)
 					break;
 #endif
@@ -1529,7 +1529,7 @@ int ReadControls(d_event *event)
 			}
 		}
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 		if (g_rt_free_cam_info.g_free_cam_enabled) {
 			return;
 		}

@@ -100,7 +100,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "editor/esegment.h"
 #endif
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "polymodel_viewer.h"
 #include "globvars.h"
 #include "Game/Lights.h"
@@ -176,7 +176,7 @@ void reset_palette_add()
 
 u_int32_t Game_screen_mode = SM(640,480);
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "RTgr.h"
 #endif
 
@@ -189,7 +189,7 @@ float remap(const float input, const float i1, const float i2, const float o1, c
 
 //initialize the various canvases on the game screen
 //called every time the screen mode or cockpit changes
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 void init_cockpit()
 {
     //Initialize the on-screen canvases
@@ -278,7 +278,7 @@ void init_cockpit()
 	if ( Screen_mode == SCREEN_EDITOR )
 		PlayerCfg.CockpitMode[1] = CM_FULL_SCREEN;
 
-#if !defined(OGL) && !defined(RT_DX12)
+#if !defined(OGL) && (!defined(RT_DX12) && !defined(RT_METAL))
 	if ( Game_screen_mode != (HiresGFXAvailable? SM(640,480) : SM(320,200)) && PlayerCfg.CockpitMode[1] != CM_LETTERBOX) {
 		PlayerCfg.CockpitMode[1] = CM_FULL_SCREEN;
 	}
@@ -528,7 +528,7 @@ void move_player_2_segment(segment *seg,int side)
 void do_photos();
 void level_with_floor();
 
-#if !defined(OGL) && !defined(RT_DX12)
+#if !defined(OGL) && (!defined(RT_DX12) && !defined(RT_METAL))
 void save_screen_shot(int automap_flag)
 {
 	grs_canvas *screen_canv=&grd_curscreen->sc_canvas;
@@ -1013,7 +1013,7 @@ window *game_setup(void)
 	init_gauges();
 	netplayerinfo_on = 0;
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	g_light_multiplier = g_light_multiplier_default; //Needs to be changed to RTconfig
 	g_pending_light_update = true;
 	RT_ResetLightEmission();
@@ -1114,7 +1114,7 @@ int game_handler(window *wind, d_event *event, void *data)
 				GameProcessFrame();
 			}
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			RT_GetRendererIO()->delta_time = f2fl(FrameTime);
 			RT_BeginFrame();
 			RT_StartImGuiFrame();
@@ -1129,7 +1129,7 @@ int game_handler(window *wind, d_event *event, void *data)
 				game_render_frame();
 			}
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			RT_EndImguiFrame();
 			RT_EndFrame();
 #endif
@@ -1137,7 +1137,7 @@ int game_handler(window *wind, d_event *event, void *data)
 
 		case EVENT_WINDOW_CLOSE:
 			digi_stop_digi_sounds();
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			g_rt_enable_debug_menu = false;
 
 			if (g_rt_free_cam_info.g_free_cam_enabled)
@@ -1215,7 +1215,7 @@ void GameProcessFrame(void)
 	fix player_shields = Players[Player_num].shields;
 	int player_was_dead = Player_is_dead;
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	if (g_rt_free_cam_info.g_free_cam_enabled) {
 		object_move_one(&Objects[g_rt_free_cam_info.g_free_cam_obj]);
 		return;

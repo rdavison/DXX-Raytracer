@@ -32,7 +32,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "laser.h"
 #include "logger.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "RTgr.h"
 #endif
 
@@ -482,7 +482,7 @@ void do_physics_sim(object *obj)
 	//check for correct object segment
 
 	if (!get_seg_masks(&obj->pos, obj->segnum, 0, __FILE__, __LINE__).centermask == 0 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 		&& !g_rt_free_cam_info.g_free_cam_enabled && !g_rt_free_cam_info.g_free_cam_clipping_enabled
 #endif
 		)
@@ -620,7 +620,7 @@ void do_physics_sim(object *obj)
 			return;
 		}
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 		//This needs to be checked seperate for the ifdef
 		if (g_rt_free_cam_info.g_free_cam_enabled && g_rt_free_cam_info.g_free_cam_clipping_enabled) {
 			obj->pos = new_pos;

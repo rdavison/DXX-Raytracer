@@ -253,7 +253,7 @@ void mouse_toggle_cursor(int activate)
 		SDL_ShowCursor(SDL_DISABLE);
 }
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "RTgr.h"
 #endif RT_DX12
 // If we want to display/hide cursor, do so if not already and also hide it automatically after some time.
@@ -272,7 +272,7 @@ void mouse_cursor_autohide()
 			hidden_time = timer_query();
 		}
 	}
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	else if(g_rt_enable_debug_menu)
 	{
 		SDL_ShowCursor(SDL_ENABLE);

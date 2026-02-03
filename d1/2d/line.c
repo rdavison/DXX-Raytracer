@@ -268,7 +268,7 @@ int gr_uline(fix _a1, fix _b1, fix _a2, fix _b2)
 	case BM_OGL:
 		ogl_ulinec(a1,b1,a2,b2,COLOR);
 		return 0;
-#elif RT_DX12
+#elif defined(RT_DX12) || defined(RT_METAL)
 	case BM_OGL:
 		dx12_ulinec(a1, b1, a2, b2, COLOR);
 		return 0;

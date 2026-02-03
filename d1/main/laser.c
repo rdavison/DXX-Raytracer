@@ -177,7 +177,7 @@ void do_muzzle_stuff(int segnum, vms_vector *pos, vms_vector* color)
 	Muzzle_data[Muzzle_queue_index].create_time = timer_query();
 	Muzzle_data[Muzzle_queue_index].segnum = segnum;
 	Muzzle_data[Muzzle_queue_index].pos = *pos;
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	Muzzle_data[Muzzle_queue_index].RT_muzzleColor = *color;
 #endif RT_DX12
 	Muzzle_queue_index++;

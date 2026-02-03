@@ -56,7 +56,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "ogl_init.h"
 #endif
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "dx12.h"
 #include "GLTFLoader.h"
 #include "Core/Arena.h"
@@ -495,7 +495,7 @@ void update_cockpits();
 //render a frame for the game
 void game_render_frame_mono(int flip)
 {
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	if (RT_CheckWindowMinimized())
 		return;
 #endif
@@ -511,7 +511,7 @@ void game_render_frame_mono(int flip)
 
 	if (PlayerCfg.CockpitMode[1] == CM_FULL_COCKPIT || PlayerCfg.CockpitMode[1] == CM_STATUS_BAR)
 		render_gauges();
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	if (PlayerCfg.CockpitMode[1] == CM_MODEL_3D)
 		render_gauges();
 #endif
@@ -541,7 +541,7 @@ void toggle_cockpit()
 			new_mode = CM_STATUS_BAR;
 			break;
         case CM_STATUS_BAR:
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
             new_mode = CM_MODEL_3D;
             break;
         case CM_MODEL_3D:
@@ -568,7 +568,7 @@ extern void ogl_loadbmtexture(grs_bitmap *bm);
 // This actually renders the new cockpit onto the screen.
 #ifdef OGL
 #define UBITMAPM ogl_ubitmapm_cs
-#elif RT_DX12
+#elif defined(RT_DX12) || defined(RT_METAL)
 #define UBITMAPM dx12_ubitmapm_cs
 #else
 #define UBITMAPM(x, y, dw, dh, bm, c, scale) gr_ubitmapm(x, y, bm)
@@ -597,7 +597,7 @@ void update_cockpits()
 		case CM_LETTERBOX:
 			gr_set_current_canvas(NULL);
 			break;
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	    case CM_MODEL_3D:
             break;
 #endif

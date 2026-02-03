@@ -76,7 +76,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "ogl_init.h"
 #endif
 #include "logger.h"
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #define RT_RENDER_SETTINGS_CONFIG_FILE "render_settings.vars"
 #include "Core/String.h"
 #include "Core/Config.h"
@@ -1225,7 +1225,7 @@ void reticle_config()
 	PlayerCfg.ReticleSize = m[opt_ret_size].value;
 }
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 
 int RT_GetIntFromConfig(RT_Config* config, RT_String key) 
 {
@@ -1559,7 +1559,7 @@ void raytrace_config()
 #endif
 
 int opt_gr_texfilt, opt_gr_brightness, opt_gr_reticlemenu, opt_gr_alphafx, opt_gr_dynlightcolor, opt_gr_vsync, opt_gr_multisample, opt_gr_fpsindi, opt_gr_disablecockpit;
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 int opt_gr_raytracemenu; opt_gr_enable_pathtracing;
 #endif
 int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
@@ -1576,7 +1576,7 @@ int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 #ifdef OGL
 				&& ogl_maxanisotropy <= 1.0
 #endif
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 				&& false
 #endif
 				)
@@ -1592,7 +1592,7 @@ int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 		case EVENT_NEWMENU_SELECTED:
 			if (citem == opt_gr_reticlemenu)
 				reticle_config();
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			if (citem == opt_gr_raytracemenu)
 				raytrace_config();
 #endif
@@ -1612,7 +1612,7 @@ void graphics_config()
 #ifdef OGL
 	newmenu_item m[16];
 	int i = 0;
-#elif RT_DX12
+#elif defined(RT_DX12) || defined(RT_METAL)
 	newmenu_item m[7];
 #else
 	newmenu_item m[6];
@@ -1633,7 +1633,7 @@ void graphics_config()
 	opt_gr_reticlemenu = nitems;
 	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Reticle Options"; nitems++;
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	opt_gr_raytracemenu = nitems;
 	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Raytracing Options"; nitems++;
 #endif // RT_DX12

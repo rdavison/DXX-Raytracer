@@ -54,7 +54,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "ogl_init.h"
 #endif
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "RTgr.h"
 #include "dx12.h"
 #include "globvars.h"
@@ -119,7 +119,7 @@ static int title_handler(window *wind, d_event *event, title_screen *ts)
 			break;
 
 		case EVENT_WINDOW_DRAW:
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			RT_GetRendererIO()->delta_time = f2fl(FrameTime);
 			RT_BeginFrame();
 			RT_StartImGuiFrame();
@@ -128,7 +128,7 @@ static int title_handler(window *wind, d_event *event, title_screen *ts)
 			gr_set_current_canvas( NULL );
 			show_fullscr(&ts->title_bm);
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			RT_EndImguiFrame();
 			RT_EndFrame();
 #endif
@@ -227,7 +227,7 @@ void show_titles(void)
 	if (PHYSFSX_exists("assets/splash-logo/buas.pcx", 1))
 		show_title_screen("assets/splash-logo/buas.pcx", 1, 0);
 
-#if RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	if (PHYSFSX_exists("assets/splash-logo/LogoRaytraced.png", 1))
 	{
 		show_title_screen("assets/splash-logo/LogoRaytraced.png", 1, 0);
@@ -736,7 +736,7 @@ static void show_animated_bitmap(briefing *br)
 {
 	grs_canvas  *curcanv_save, *bitmap_canv=0;
 	grs_bitmap	*bitmap_ptr;
-#if defined(OGL) || defined(RT_DX12)
+#if defined(OGL) || (defined(RT_DX12) || defined(RT_METAL))
 	float scale = 1.0;
 
 	if (((float)SWIDTH/320) < ((float)SHEIGHT/200))
@@ -752,7 +752,7 @@ static void show_animated_bitmap(briefing *br)
 			bi = piggy_find_bitmap(br->bitmap_name);
 			bitmap_ptr = &GameBitmaps[bi.index];
 			PIGGY_PAGE_IN( bi );
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			dx12_ubitmapm_cs(rescale_x(220), rescale_y(45), bitmap_ptr->bm_w * scale, bitmap_ptr->bm_h * scale, bitmap_ptr, 255, F1_0);
 #elif OGL
 			ogl_ubitmapm_cs(rescale_x(220), rescale_y(45),bitmap_ptr->bm_w*scale,bitmap_ptr->bm_h*scale,bitmap_ptr,255,F1_0);
@@ -821,7 +821,7 @@ static void show_animated_bitmap(briefing *br)
 		bi = piggy_find_bitmap(br->bitmap_name);
 		bitmap_ptr = &GameBitmaps[bi.index];
 		PIGGY_PAGE_IN( bi );
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 		dx12_ubitmapm_cs(0, 0, bitmap_ptr->bm_w * scale, bitmap_ptr->bm_h * scale, bitmap_ptr, 255, F1_0);
 #elif OGL
 		ogl_ubitmapm_cs(0,0,bitmap_ptr->bm_w*scale,bitmap_ptr->bm_h*scale,bitmap_ptr,255,F1_0);
@@ -852,7 +852,7 @@ static void show_animated_bitmap(briefing *br)
 static void show_briefing_bitmap(grs_bitmap *bmp)
 {
 	grs_canvas	*curcanv_save, *bitmap_canv;
-#if defined(OGL) || defined(RT_DX12)
+#if defined(OGL) || (defined(RT_DX12) || defined(RT_METAL))
 	float scale = 1.0;
 #endif
 
@@ -860,14 +860,14 @@ static void show_briefing_bitmap(grs_bitmap *bmp)
 	curcanv_save = grd_curcanv;
 	gr_set_current_canvas(bitmap_canv);
 
-#if defined(OGL) || defined(RT_DX12)
+#if defined(OGL) || (defined(RT_DX12) || defined(RT_METAL))
 	if (((float)SWIDTH / (HIRESMODE ? 640 : 320)) < ((float)SHEIGHT / (HIRESMODE ? 480 : 200)))
 		scale = ((float)SWIDTH / (HIRESMODE ? 640 : 320));
 	else
 		scale = ((float)SHEIGHT / (HIRESMODE ? 480 : 200));
 #endif
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	dx12_ubitmapm_cs(0, 0, bmp->bm_w * scale, bmp->bm_h * scale, bmp, 255, F1_0);
 #elif OGL
 	ogl_ubitmapm_cs(0,0,bmp->bm_w*scale,bmp->bm_h*scale,bmp,255,F1_0);
@@ -1132,7 +1132,7 @@ static int briefing_handler(window *wind, d_event *event, briefing *br)
 		}
 
 		case EVENT_WINDOW_DRAW:
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			RT_Vec2 top_left_blit;
 			RT_Vec2 bottom_right_blit;
 			bool raytrace_enemy = br->robot_num != -1;
@@ -1198,7 +1198,7 @@ static int briefing_handler(window *wind, d_event *event, briefing *br)
 			else if (br->flashing_cursor)
 				gr_printf(br->text_x, br->text_y, "_");
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			if (raytrace_enemy)
 			{
 				RT_UpdateMaterialEdges();

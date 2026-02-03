@@ -33,7 +33,7 @@ void gr_urect(int left,int top,int right,int bot)
 		ogl_urect(left,top,right,bot);
 		return;
 	}
-#elif RT_DX12
+#elif defined(RT_DX12) || defined(RT_METAL)
 	if (TYPE == BM_OGL) {
 		dx12_urect(left, top, right, bot);
 		return;
@@ -55,7 +55,7 @@ void gr_rect(int left,int top,int right,int bot)
 		ogl_urect(left,top,right,bot);
 		return;
 	}
-#elif RT_DX12
+#elif defined(RT_DX12) || defined(RT_METAL)
 	if (TYPE == BM_OGL) {
 		dx12_urect(left, top, right, bot);
 		return;

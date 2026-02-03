@@ -8,7 +8,7 @@
 #include "gr.h"
 #include "grdef.h"
 
-#if !defined(OGL) && !defined(RT_DX12)
+#if !defined(OGL) && (!defined(RT_DX12) && !defined(RT_METAL))
 int gr_disk(fix xc1,fix yc1,fix r1)
 {
 	int p,x, y, xc, yc, r;

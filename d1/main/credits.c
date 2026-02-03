@@ -43,7 +43,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "config.h"
 #include "logger.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "Renderer.h"
 #endif
 
@@ -128,7 +128,7 @@ int credits_handler(window *wind, d_event *event, credits *cr)
 				}
 			}
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			RT_GetRendererIO()->delta_time = f2fl(FrameTime);
 			RT_BeginFrame();
 			RT_StartImGuiFrame();
@@ -168,7 +168,7 @@ int credits_handler(window *wind, d_event *event, credits *cr)
 			if (cr->row >= ROW_SPACING)
 				cr->row = 0;
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			RT_EndImguiFrame();
 			RT_EndFrame();
 #endif

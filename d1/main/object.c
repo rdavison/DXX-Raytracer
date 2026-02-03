@@ -222,7 +222,7 @@ void draw_object_blob(object *obj,bitmap_index bmi)
 }
 
 //draw an object that is a texture-mapped rod
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
 void draw_object_tmap_rod(object *obj,bitmap_index bitmapi,int lighted)
 {
 	grs_bitmap * bitmap = &GameBitmaps[bitmapi.index];
@@ -470,7 +470,7 @@ void draw_polygon_object(object *obj)
 
 			uint32_t old_flags;
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			if (is_laser_with_inner_model)
 			{
 				// NOTE(daniel): I don't love this kind of code that pushes and pops stuff
@@ -489,14 +489,14 @@ void draw_polygon_object(object *obj)
 					   engine_glow_value,
 					   alt_textures);
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			if (is_laser_with_inner_model)
 			{
 				RT_RaytraceSetRenderFlagsOverride(old_flags);
 			}
 #endif
 
-#if !defined(OGL) || !defined(RT_DX12) // in software rendering must draw inner model last
+#if !defined(OGL) || (!defined(RT_DX12) && !defined(RT_METAL)) // in software rendering must draw inner model last
 
 #else
 			if (obj->type == OBJ_WEAPON && (Weapon_info[obj->id].model_num_inner > -1 )) {

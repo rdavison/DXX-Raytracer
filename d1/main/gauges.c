@@ -57,7 +57,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "internal.h"
 #include "net_udp.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "dx12.h"
 #include "Core/Arena.h"
 #include "grdef.h"
@@ -322,7 +322,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #define SB_SECONDARY_BOX		(!HIRESMODE?3:7)
 
 // Let's define all the UI's UV locations here; they're all in the range from 0 to 1023
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 const float pos_red_key[4] = { 829, 22, 928, 96 };
 const float pos_gold_key[4] = { 720, 21, 815, 96 };
 const float pos_blue_key[4] = { 604, 21, 705, 95 };
@@ -347,7 +347,7 @@ const float pos_text_weapon_secondary[2] = { 701, 764 };
 // scaling gauges
 #define BASE_WIDTH (HIRESMODE? 640 : 320)
 #define BASE_HEIGHT	(HIRESMODE? 480 : 200)
-#if defined(OGL) || defined(RT_DX12)
+#if defined(OGL) || (defined(RT_DX12) || defined(RT_METAL))
 #define HUD_SCALE_X(x)		((int) ((double) (x) * ((double)grd_curscreen->sc_w/BASE_WIDTH) + 0.5))
 #define HUD_SCALE_Y(y)		((int) ((double) (y) * ((double)grd_curscreen->sc_h/BASE_HEIGHT) + 0.5))
 #define HUD_SCALE_X_1024(x)		((int) ((double) (x) * ((double)grd_curscreen->sc_w) + 0.5))
@@ -724,7 +724,7 @@ static inline void hud_bitblt_free (int x, int y, int w, int h, grs_bitmap *bm)
 {
 #ifdef OGL
 	ogl_ubitmapm_cs (x,y,w,h,bm,-1,F1_0);
-#elif RT_DX12
+#elif defined(RT_DX12) || defined(RT_METAL)
 	dx12_ubitmapm_cs(x, y, w, h, bm, -1, F1_0);
 #else
 	gr_ubitmapm(x, y, bm);
@@ -735,7 +735,7 @@ static inline void hud_bitblt (int x, int y, grs_bitmap *bm)
 {
 #ifdef OGL
 	ogl_ubitmapm_cs (x,y,HUD_SCALE_X (bm->bm_w),HUD_SCALE_Y (bm->bm_h),bm,-1,F1_0);
-#elif RT_DX12
+#elif defined(RT_DX12) || defined(RT_METAL)
 	dx12_ubitmapm_cs(x, y, HUD_SCALE_X(bm->bm_w), HUD_SCALE_Y(bm->bm_h), bm, -1, F1_0);
 #else
 	gr_ubitmapm(x, y, bm);
@@ -1493,7 +1493,7 @@ void cockpit_decode_alpha(grs_bitmap *bm)
 	gr_set_transparent(&deccpt,1);
 #ifdef OGL
 	ogl_ubitmapm_cs (0, 0, -1, -1, &deccpt, 255, F1_0); // render one time to init the texture
-#elif RT_DX12
+#elif defined(RT_DX12) || defined(RT_METAL)
 	dx12_ubitmapm_cs(0, 0, -1, -1, &deccpt, 255, F1_0);
 #endif
 	if (WinBoxOverlay[0] != NULL)
@@ -1722,7 +1722,7 @@ void draw_keys()
 	}
 }
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 void render_ui_bitmap(bitmap_index bitmap, float x1, float y1, float x2, float y2) {
 	grs_bitmap* bm = &GameBitmaps[bitmap.index];
 	dx12_ubitmapm_cs(x1, y1, (x2 - x1), (y2 - y1), bm, -1, F1_0);
@@ -1744,7 +1744,7 @@ void draw_weapon_info_sub(int info_index,gauge_box *box,int pic_x,int pic_y,char
 
 	PIGGY_PAGE_IN( Weapon_info[info_index].picture );
 	if (PlayerCfg.CockpitMode[1] == CM_MODEL_3D) {
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 		render_ui_bitmap(Weapon_info[info_index].picture, pic_x, pic_y, pic_x + bm->bm_w * 6, pic_y + bm->bm_h * 6);
 #endif
 	}
@@ -1784,7 +1784,7 @@ void draw_weapon_info(int weapon_type,int weapon_num)
 			x=SB_PRIMARY_AMMO_X;
 			y=SB_PRIMARY_AMMO_Y;
 		}
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 		else if (PlayerCfg.CockpitMode[1] == CM_MODEL_3D) {
 			int temp = grd_curcanv->cv_fade_level;
 			int fade_value = f2i(weapon_box_fade_values[0]);
@@ -1813,7 +1813,7 @@ void draw_weapon_info(int weapon_type,int weapon_num)
 			x=SB_SECONDARY_AMMO_X;
 			y=SB_SECONDARY_AMMO_Y;
 		}
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 		else if (PlayerCfg.CockpitMode[1] == CM_MODEL_3D) {
 			int temp = grd_curcanv->cv_fade_level;
 			int fade_value = f2i(weapon_box_fade_values[1]);
@@ -2173,7 +2173,7 @@ void show_reticle(int reticle_type, int secondary_display)
 	int use_hires_reticle,ofs;
 
 	x = grd_curcanv->cv_bitmap.bm_w/2;
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	y = grd_curcanv->cv_bitmap.bm_h/2 - grd_curcanv->cv_bitmap.bm_h * (RT_RaytraceGetVerticalOffset());
 #else
 	y = grd_curcanv->cv_bitmap.bm_h/2;
@@ -2840,7 +2840,7 @@ void render_gauges()
 	int shields = f2ir(Players[Player_num].shields);
 	int cloak = ((Players[Player_num].flags & PLAYER_FLAGS_CLOAKED) != 0);
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	Assert(PlayerCfg.CockpitMode[1] == CM_FULL_COCKPIT || PlayerCfg.CockpitMode[1] == CM_STATUS_BAR || PlayerCfg.CockpitMode[1] == CM_MODEL_3D);
 #else
 	Assert(PlayerCfg.CockpitMode[1] == CM_FULL_COCKPIT || PlayerCfg.CockpitMode[1] == CM_STATUS_BAR);
@@ -2919,7 +2919,7 @@ void render_gauges()
 			sb_show_score_added();
 		}
 	}
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 
 	// If we're using the 3d cockpit model, render every UI element to the cockpit's screen textures
 	else if (PlayerCfg.CockpitMode[1] == CM_MODEL_3D) {
@@ -3058,7 +3058,7 @@ void render_gauges()
 		draw_weapon_boxes();
 	}
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	dx12_end_frame();
 	dx12_start_frame();
 #endif

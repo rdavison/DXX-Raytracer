@@ -637,7 +637,7 @@ void LoadLevel(int level_num,int page_in_textures)
 	if (!load_level(level_name))
 	{
 		Current_level_num = level_num;
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 		// Unload the previous level acceleration structure, if there is any
 		RT_UnloadLevel();
 		// Load the new level and create the acceleration structure

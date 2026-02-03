@@ -7,7 +7,7 @@
 #ifndef _RT_EXT_H
 #define _RT_EXT_H
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 // NOTE(daniel): This makes me very sad I wish it didn't exist
 #define _RT_DRAW_POLY const int signature, ubyte object_type,
 #define _RT_DRAW_POLY_SEND obj->signature, obj->type,

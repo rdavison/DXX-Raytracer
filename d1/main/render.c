@@ -57,7 +57,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "args.h"
 #include "logger.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "Core/Arena.h"
 #include "Game/Lights.h"
 #include "RTmaterials.h"
@@ -178,7 +178,7 @@ void flash_frame()
 
 	flash_scale = (flash_scale + f1_0) / 2;
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	g_light_multiplier = f2fl(flash_scale);
 	g_pending_light_update = true;
 
@@ -766,7 +766,7 @@ void render_segment(int segnum)
 {
 	segment *seg = &Segments[segnum];
 	g3s_codes cc;
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
 	int sn;
 #endif
 
@@ -779,7 +779,7 @@ void render_segment(int segnum)
 
 		Automap_visited[segnum] = 1;
 
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
 		for (sn = 0; sn < MAX_SIDES_PER_SEGMENT; sn++)
 			render_side(seg, sn);
 #endif
@@ -1479,7 +1479,7 @@ void start_lighting_frame(object *viewer);
 #ifdef JOHN_ZOOM
 fix Zoom_factor = F1_0;
 #endif
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "Renderer.h"
 #include "Core/MiniMath.h"
 #include "Game/Level.h"
@@ -1568,7 +1568,7 @@ void render_frame(fix eye_offset)
 		}
 		g3_set_view_matrix(&Viewer_eye, &Viewer->orient, fixdiv(Render_zoom, Zoom_factor));
 #else
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 		if (!g_rt_free_cam_info.g_free_cam_enabled) {
 			g3_set_view_matrix(&Viewer_eye, &Viewer->orient, Render_zoom);
 		}
@@ -1588,7 +1588,7 @@ void render_frame(fix eye_offset)
 		gr_clear_canvas(Clear_window_color);
 	}
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 
 	RT_SceneSettings scene_settings = { 0 };
 	RT_Vec3 object_pos;
@@ -1653,13 +1653,13 @@ void render_frame(fix eye_offset)
 
 	render_mine(start_seg_num, eye_offset);
 
-#ifdef RT_DX12 // Separated because render_mine submits dynamic lights, which impacts how many level lights we want to send
+#if defined(RT_DX12) || defined(RT_METAL) // Separated because render_mine submits dynamic lights, which impacts how many level lights we want to send
 	RT_RenderLevel(object_pos);
 #endif
 
 	g3_end_frame();
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	// Draw cockpit mesh
 	if (PlayerCfg.CockpitMode[0] == CM_MODEL_3D) {
 		static RT_Mat4 prev_matrix = { .e = {

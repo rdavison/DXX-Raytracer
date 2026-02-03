@@ -48,7 +48,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #endif
 #include "logger.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "RTgr.h"
 #include "RTmaterials.h"
 #endif //RT_DX12
@@ -568,7 +568,7 @@ void draw_polygon_model(_RT_DRAW_POLY vms_vector* pos, vms_matrix* orient, vms_a
 
 	if (flags == 0)		//draw entire object
 	{
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
 		g3_draw_polygon_model(po->model_data, texture_list, anim_angles, light, glow_values);
 #else
 		//RT_DrawPolyModel(model_num, objNum, object_type, pos, orient);
@@ -590,7 +590,7 @@ void draw_polygon_model(_RT_DRAW_POLY vms_vector* pos, vms_matrix* orient, vms_a
 				vm_vec_avg(&ofs, &po->submodel_mins[i], &po->submodel_maxs[i]);
 				vm_vec_negate(&ofs);
 				g3_start_instance_matrix(&ofs, NULL);
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
 				g3_draw_polygon_model(&po->model_data[po->submodel_ptrs[i]], texture_list, anim_angles, light, glow_values);
 #else
 				// Get matrix from local position offset
@@ -758,7 +758,7 @@ void draw_model_picture(int mn, vms_angvec* orient_angles)
 	g3_start_frame();
 	g3_set_view_matrix(&temp_pos, &temp_orient, 0x9000);
 
-#ifndef RT_DX12
+#if !defined(RT_DX12) && !defined(RT_METAL)
 	if (Polygon_models[mn].rad != 0)
 		temp_pos.z = fixmuldiv(DEFAULT_VIEW_DIST, Polygon_models[mn].rad, BASE_MODEL_SIZE);
 	else

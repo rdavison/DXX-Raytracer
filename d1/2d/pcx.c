@@ -26,7 +26,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "pcx.h"
 #include "physfsx.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "Core/Arena.h"
 #include "ImageReadWrite.h"
 #endif
@@ -187,7 +187,7 @@ int bald_guy_load( char * filename, grs_bitmap * bmp,int bitmap_type ,ubyte * pa
 
 int pcx_read_bitmap( char * filename, grs_bitmap * bmp,int bitmap_type ,ubyte * palette )
 {
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	// Just call me Butch Cassidy because this is a hijacking
 	char *ext = strchr(filename, '.');
 	if (strcmp(ext, ".png") == 0)

@@ -20,7 +20,7 @@
 #include "vers_id.h"
 #include "timer.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 #include "Renderer.h"
 #include "game.h"
 #endif
@@ -180,7 +180,7 @@ static int con_handler(window *wind, d_event *event)
 			if (con_state == CON_STATE_CLOSED && wind)
 				window_close(wind);
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			RT_GetRendererIO()->delta_time = f2fl(FrameTime);
 			RT_BeginFrame();
 			RT_StartImGuiFrame();
@@ -188,7 +188,7 @@ static int con_handler(window *wind, d_event *event)
 
 			con_draw();
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 			RT_EndImguiFrame();
 			RT_EndFrame();
 #endif

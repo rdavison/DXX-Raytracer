@@ -32,7 +32,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #endif
 #include "piggy.h"
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 // This was including RTgr.h which includes cimgui.h (why!)... Don't do that, especially if you don't need it.
 // Even Renderer.h is superfluous. Only for RT_UploadMeshParams, that hacky array didn't need to be declared
 // in this header. Be mindful of header pollution!
@@ -47,7 +47,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #define MAX_SUBMODELS 10
 #endif
 
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
  // todo(lily): HACK HACK HACK we should 100% delete this once we have raytraced briefing models
 RT_UploadMeshParams meshVerticesRawHack[MAX_POLYGON_MODELS];
 
@@ -65,7 +65,7 @@ typedef struct polymodel {
 	int     n_models;
 	int     model_data_size;
 	ubyte   *model_data;
-#ifdef RT_DX12
+#if defined(RT_DX12) || defined(RT_METAL)
 	RT_ResourceHandle submodel[MAX_SUBMODELS];
 	RT_ModelTree model_tree[10]; // used in submodel rendering
 #endif 

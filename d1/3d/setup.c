@@ -62,7 +62,7 @@ void g3_start_frame(void)
 
 #ifdef OGL
 	ogl_start_frame();
-#elif RT_DX12
+#elif defined(RT_DX12) || defined(RT_METAL)
 	dx12_start_frame();
 	init_interface_vars_to_assembler();
 #else
@@ -75,7 +75,7 @@ void g3_end_frame(void)
 {
 #ifdef OGL
 	ogl_end_frame();
-#elif RT_DX12
+#elif defined(RT_DX12) || defined(RT_METAL)
 	dx12_end_frame();
 #endif
 
