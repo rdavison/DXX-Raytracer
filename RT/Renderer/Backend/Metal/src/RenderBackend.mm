@@ -11,6 +11,15 @@
 #include "imgui_impl_metal.h"
 #include <math.h>
 #include "Core/Config.h"
+#include <vector>
+
+struct RasterBatch
+{
+	RT_ResourceHandle texture;
+	std::vector<RT_RasterTriVertex> vertices;
+};
+
+static std::vector<RasterBatch> g_raster_batches;
 
 #define RT_RENDER_SETTINGS_CONFIG_FILE "render_settings.vars"
 
@@ -355,7 +364,23 @@ namespace RenderBackend
 		g_mtl.viewport_height = height;
 	}
 	void RasterSetRenderTarget(RT_ResourceHandle texture) { MTL_STUB("RasterSetRenderTarget"); }
-	void RasterTriangles(RT_RasterTrianglesParams* params, uint32_t num_params) { MTL_STUB("RasterTriangles"); }
+	void RasterTriangles(RT_RasterTrianglesParams* params, uint32_t num_params)
+	{
+		if (!params || num_params == 0)
+			return;
+
+		for (uint32_t i = 0; i < num_params; i++)
+		{
+			RT_RasterTrianglesParams* batch_params = &params[i];
+			if (!batch_params->vertices || batch_params->num_vertices == 0)
+				continue;
+
+			RasterBatch batch = {};
+			batch.texture = batch_params->texture_handle;
+			batch.vertices.assign(batch_params->vertices, batch_params->vertices + batch_params->num_vertices);
+			g_raster_batches.emplace_back(std::move(batch));
+		}
+	}
 	void RasterLines(RT_RasterLineVertex* vertices, uint32_t num_vertices) { MTL_STUB("RasterLines"); }
 	void RasterLinesWorld(RT_RasterLineVertex* vertices, uint32_t num_vertices) { MTL_STUB("RasterLinesWorld"); }
 	void RasterRender() { MTL_STUB("RasterRender"); }
