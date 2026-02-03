@@ -14,6 +14,7 @@ set(IMGUI_SOURCE_FILES
     "cimgui/imgui/imgui_draw.cpp"
     "cimgui/imgui/imgui_tables.cpp"
     "cimgui/imgui/imgui_widgets.cpp"
+    "cimgui/imgui/backends/imgui_impl_metal.mm"
 )
 
 set(IMPLOT_SOURCE_FILES
@@ -49,6 +50,7 @@ target_include_directories(Renderer PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/cimgui"
     "${CMAKE_CURRENT_SOURCE_DIR}/cimgui/imgui"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cimgui/imgui/backends"
     "${CMAKE_CURRENT_SOURCE_DIR}/implot"
     "${CMAKE_CURRENT_SOURCE_DIR}/STB"
     "${CMAKE_CURRENT_SOURCE_DIR}/CGLTF"

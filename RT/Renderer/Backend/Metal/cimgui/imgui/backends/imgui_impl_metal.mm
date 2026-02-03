@@ -136,7 +136,9 @@ bool ImGui_ImplMetal_Init(id<MTLDevice> device)
     io.BackendRendererUserData = (void*)bd;
     io.BackendRendererName = "imgui_impl_metal";
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;  // We can honor the ImDrawCmd::VtxOffset field, allowing for large meshes.
+#if IMGUI_VERSION_NUM >= 19000
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;   // We can honor ImGuiPlatformIO::Textures[] requests during render.
+#endif
 
     bd->SharedMetalContext = [[MetalContext alloc] init];
     bd->SharedMetalContext.device = device;
@@ -157,8 +159,11 @@ void ImGui_ImplMetal_Shutdown()
 
     io.BackendRendererName = nullptr;
     io.BackendRendererUserData = nullptr;
-    io.BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures);
+    io.BackendFlags &= ~ImGuiBackendFlags_RendererHasVtxOffset;
+#if IMGUI_VERSION_NUM >= 19000
+    io.BackendFlags &= ~ImGuiBackendFlags_RendererHasTextures;
     platform_io.ClearRendererHandlers();
+#endif
 }
 
 void ImGui_ImplMetal_NewFrame(MTLRenderPassDescriptor* renderPassDescriptor)
@@ -227,15 +232,17 @@ void ImGui_ImplMetal_RenderDrawData(ImDrawData* draw_data, id<MTLCommandBuffer> 
     // Avoid rendering when minimized, scale coordinates for retina displays (screen coordinates != framebuffer coordinates)
     int fb_width = (int)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x);
     int fb_height = (int)(draw_data->DisplaySize.y * draw_data->FramebufferScale.y);
-    if (fb_width <= 0 || fb_height <= 0 || draw_data->CmdLists.Size == 0)
+    if (fb_width <= 0 || fb_height <= 0 || draw_data->CmdListsCount == 0)
         return;
 
+#if IMGUI_VERSION_NUM >= 19000
     // Catch up with texture updates. Most of the times, the list will have 1 element with an OK status, aka nothing to do.
     // (This almost always points to ImGui::GetPlatformIO().Textures[] but is part of ImDrawData to allow overriding or disabling texture updates).
     if (draw_data->Textures != nullptr)
         for (ImTextureData* tex : *draw_data->Textures)
             if (tex->Status != ImTextureStatus_OK)
                 ImGui_ImplMetal_UpdateTexture(tex);
+#endif
 
     // Try to retrieve a render pipeline state that is compatible with the framebuffer config for this frame
     // The hit rate for this cache should be very near 100%.
@@ -263,8 +270,9 @@ void ImGui_ImplMetal_RenderDrawData(ImDrawData* draw_data, id<MTLCommandBuffer> 
     // Render command lists
     size_t vertexBufferOffset = 0;
     size_t indexBufferOffset = 0;
-    for (const ImDrawList* draw_list : draw_data->CmdLists)
+    for (int draw_list_i = 0; draw_list_i < draw_data->CmdListsCount; draw_list_i++)
     {
+        const ImDrawList* draw_list = draw_data->CmdLists[draw_list_i];
         memcpy((char*)vertexBuffer.buffer.contents + vertexBufferOffset, draw_list->VtxBuffer.Data, (size_t)draw_list->VtxBuffer.Size * sizeof(ImDrawVert));
         memcpy((char*)indexBuffer.buffer.contents + indexBufferOffset, draw_list->IdxBuffer.Data, (size_t)draw_list->IdxBuffer.Size * sizeof(ImDrawIdx));
 
@@ -336,6 +344,7 @@ void ImGui_ImplMetal_RenderDrawData(ImDrawData* draw_data, id<MTLCommandBuffer> 
     }];
 }
 
+#if IMGUI_VERSION_NUM >= 19000
 static void ImGui_ImplMetal_DestroyTexture(ImTextureData* tex)
 {
     if (MetalTexture* backend_tex = (__bridge_transfer MetalTexture*)(tex->BackendUserData))
@@ -402,6 +411,7 @@ void ImGui_ImplMetal_UpdateTexture(ImTextureData* tex)
         ImGui_ImplMetal_DestroyTexture(tex);
     }
 }
+#endif
 
 bool ImGui_ImplMetal_CreateDeviceObjects(id<MTLDevice> device)
 {
@@ -422,9 +432,11 @@ void ImGui_ImplMetal_DestroyDeviceObjects()
     ImGui_ImplMetal_Data* bd = ImGui_ImplMetal_GetBackendData();
 
     // Destroy all textures
+#if IMGUI_VERSION_NUM >= 19000
     for (ImTextureData* tex : ImGui::GetPlatformIO().Textures)
         if (tex->RefCount == 1)
             ImGui_ImplMetal_DestroyTexture(tex);
+#endif
 
     [bd->SharedMetalContext.renderPipelineStateCache removeAllObjects];
 }
