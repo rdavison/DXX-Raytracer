@@ -14,8 +14,6 @@ set(IMGUI_SOURCE_FILES
     "cimgui/imgui/imgui_draw.cpp"
     "cimgui/imgui/imgui_tables.cpp"
     "cimgui/imgui/imgui_widgets.cpp"
-    "cimgui/imgui/backends/imgui_impl_metal.mm"
-    "cimgui/imgui/backends/imgui_impl_osx.mm"
 )
 
 set(IMPLOT_SOURCE_FILES

@@ -1,4 +1,9 @@
 #include "RenderBackend.h"
+
+#ifdef defer
+#undef defer
+#endif
+
 #include "GlobalMetal.h"
 
 RT_MaterialEdge g_rt_material_edges[RT_MAX_MATERIAL_EDGES];
@@ -83,9 +88,9 @@ namespace RenderBackend
 
 	void BeginScene(const RT_SceneSettings* scene_settings)
 	{
-		g_mtl.prev_camera = g_mtl.camera;
-		g_mtl.camera = scene_settings->camera;
-		g_mtl.render_blit = scene_settings->render_blit;
+		g_mtl.scene.prev_camera = g_mtl.scene.camera;
+		g_mtl.scene.camera = scene_settings->camera;
+		g_mtl.scene.render_blit = scene_settings->render_blit;
 	}
 
 	void EndScene()
