@@ -1368,6 +1368,15 @@ void RT_StartImGuiFrame(void)
 #ifdef RT_DX12
 	igStartFrameWin32();
 #endif
+	ImGuiIO *io = igGetIO();
+	if (grd_curscreen)
+	{
+		io->DisplaySize = (ImVec2){(float)grd_curscreen->sc_w, (float)grd_curscreen->sc_h};
+	}
+	else
+	{
+		io->DisplaySize = (ImVec2){0.0f, 0.0f};
+	}
 	igNewFrame();
 
 	// NOTE(Justin): It is times like these you realize that you are under a lot of time pressure
