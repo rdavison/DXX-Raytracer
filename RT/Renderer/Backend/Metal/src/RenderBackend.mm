@@ -243,12 +243,14 @@ struct Triangle {
     packed_float3 normal0;
     packed_float3 normal1;
     packed_float3 normal2;
-    float4 tangent0;
-    float4 tangent1;
-    float4 tangent2;
-    float2 uv0;
-    float2 uv1;
-    float2 uv2;
+    // Use float arrays instead of float4 to avoid 16-byte alignment padding
+    // that would break CPU/GPU struct layout compatibility
+    float tangent0[4];
+    float tangent1[4];
+    float tangent2[4];
+    packed_float2 uv0;
+    packed_float2 uv1;
+    packed_float2 uv2;
     uint color;
     uint material_edge_index;
 };
@@ -341,10 +343,14 @@ kernel void raytrace_main(
     uint tri_offset = 0;
     for (uint i = 0; i < scene.instance_count; i++) {
         constant Instance& inst = instances[i];
-        float4x4 obj_to_world = inst.object_to_world;
-        // Treat triangle positions as already in world space for now.
-        float3 obj_ro = ro;
-        float3 obj_rd = rd;
+
+        // C++ uses row-major matrices, Metal expects column-major, so transpose
+        float4x4 w2o = transpose(inst.world_to_object);
+        float4x4 o2w = transpose(inst.object_to_world);
+
+        // Transform ray to object space
+        float3 obj_ro = (w2o * float4(ro, 1.0)).xyz;
+        float3 obj_rd = normalize((w2o * float4(rd, 0.0)).xyz);
 
         for (uint j = 0; j < inst.triangle_count; j++) {
             constant Triangle& tri = triangles[tri_offset + j];
@@ -353,14 +359,24 @@ kernel void raytrace_main(
             float3 p1 = float3(tri.pos1);
             float3 p2 = float3(tri.pos2);
             if (ray_tri_intersect(obj_ro, obj_rd, p0, p1, p2, t, u, v)) {
-                if (t < closest_t) {
-                    closest_t = t;
-                    float w = 1.0 - u - v;
+                // t is in object space - convert to world space distance
+                float3 obj_hit = obj_ro + obj_rd * t;
+                float3 world_hit = (o2w * float4(obj_hit, 1.0)).xyz;
+                float world_t = length(world_hit - ro);
+
+                if (world_t < closest_t) {
+                    closest_t = world_t;
+                    float w_bary = 1.0 - u - v;
                     float3 n0 = float3(tri.normal0);
                     float3 n1 = float3(tri.normal1);
                     float3 n2 = float3(tri.normal2);
-                    float3 n = normalize(n0*w + n1*u + n2*v);
-                    hit_normal = n;
+                    float3 obj_normal = normalize(n0*w_bary + n1*u + n2*v);
+
+                    // Transform normal to world space (use transpose of inverse = transpose of w2o)
+                    // Since w2o = transpose(world_to_object), we need transpose(w2o) = world_to_object
+                    // For normals: n_world = normalize((inverse(o2w)^T) * n) = normalize(w2o^T * n)
+                    hit_normal = normalize((inst.world_to_object * float4(obj_normal, 0.0)).xyz);
+
                     uint c = tri.color ? tri.color : inst.color;
                     hit_color = float4(float(c&0xFF)/255.0, float((c>>8)&0xFF)/255.0,
                                        float((c>>16)&0xFF)/255.0, 1.0);
