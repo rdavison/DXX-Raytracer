@@ -48,6 +48,10 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "ogl_init.h"
 #endif
 
+#if defined(RT_DX12) || defined(RT_METAL)
+#include "RTgr.h"
+#endif
+
 #define VERSION_NUMBER 		1
 #define SCORES_FILENAME 	"descent.hi"
 #define COOL_MESSAGE_LEN 	50
@@ -384,8 +388,13 @@ int scores_handler(window *wind, d_event *event, scores_menu *menu)
 			break;
 
 		case EVENT_WINDOW_DRAW:
+#if defined(RT_DX12) || defined(RT_METAL)
+			RT_GetRendererIO()->delta_time = f2fl(FrameTime);
+			RT_BeginFrame();
+			RT_StartImGuiFrame();
+#endif
 			gr_set_current_canvas(NULL);
-			
+
 			nm_draw_background(((SWIDTH-w)/2)-BORDERX,((SHEIGHT-h)/2)-BORDERY,((SWIDTH-w)/2)+w+BORDERX,((SHEIGHT-h)/2)+h+BORDERY);
 			
 			gr_set_current_canvas(window_get_canvas(wind));
@@ -431,8 +440,12 @@ int scores_handler(window *wind, d_event *event, scores_menu *menu)
 					scores_draw_item( menu->citem, &menu->scores.stats[menu->citem] );
 			}
 			gr_set_current_canvas(NULL);
+#if defined(RT_DX12) || defined(RT_METAL)
+			RT_EndImguiFrame();
+			RT_EndFrame();
+#endif
 			break;
-			
+
 		case EVENT_WINDOW_CLOSE:
 			d_free(menu);
 			break;

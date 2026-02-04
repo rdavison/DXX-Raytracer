@@ -118,6 +118,13 @@ void newmenu_free_background()	{
 // Draws the custom menu background pcx, if available
 void nm_draw_background1(char * filename)
 {
+#if defined(RT_METAL)
+	static int s_nm_bg1_log = 0;
+	if (s_nm_bg1_log < 5) {
+		fprintf(stderr, "[Metal] nm_draw_background1: filename=%s\n", filename ? filename : "(null)");
+		++s_nm_bg1_log;
+	}
+#endif
 	int pcx_error;
 
 	if (filename != NULL)
@@ -144,6 +151,13 @@ void nm_draw_background(int x1, int y1, int x2, int y2 )
 	int w,h,init_sub=0;
 	static float BGScaleX=1,BGScaleY=1;
 	grs_canvas *tmp,*old;
+#if defined(RT_METAL)
+	static int s_nm_bg_log = 0;
+	if (s_nm_bg_log < 5) {
+		fprintf(stderr, "[Metal] nm_draw_background: x1=%d y1=%d x2=%d y2=%d\n", x1, y1, x2, y2);
+		++s_nm_bg_log;
+	}
+#endif
 
 	if (nm_background.bm_data == NULL)
 	{
@@ -151,6 +165,12 @@ void nm_draw_background(int x1, int y1, int x2, int y2 )
 		ubyte background_palette[768];
 		gr_init_bitmap_data (&nm_background);
 		pcx_error = pcx_read_bitmap(MENU_BACKGROUND_BITMAP,&nm_background,BM_LINEAR,background_palette);
+#if defined(RT_METAL)
+		if (s_nm_bg_log < 10) {
+			fprintf(stderr, "[Metal] nm_draw_background: pcx_error=%d bm_data=%p\n", pcx_error, (void*)nm_background.bm_data);
+			++s_nm_bg_log;
+		}
+#endif
 		Assert(pcx_error == PCX_ERROR_NONE);
 		(void)pcx_error;
 		gr_remap_bitmap_good( &nm_background, background_palette, -1, -1 );
@@ -183,7 +203,17 @@ void nm_draw_background(int x1, int y1, int x2, int y2 )
 		nm_background_sub = NULL;
 	}
 	if (init_sub)
-		nm_background_sub = gr_create_sub_bitmap(&nm_background,0,0,w*(((float) nm_background.bm_w)/SWIDTH),h*(((float) nm_background.bm_h)/SHEIGHT));
+	{
+		int sub_w = w * (((float)nm_background.bm_w) / SWIDTH);
+		int sub_h = h * (((float)nm_background.bm_h) / SHEIGHT);
+		nm_background_sub = gr_create_sub_bitmap(&nm_background, 0, 0, sub_w, sub_h);
+#if defined(RT_METAL)
+		if (s_nm_bg_log < 10) {
+			fprintf(stderr, "[Metal] nm_background_sub: w=%d h=%d parent=%p\n", sub_w, sub_h, (void*)&nm_background);
+			++s_nm_bg_log;
+		}
+#endif
+	}
 	show_fullscr( nm_background_sub );
 
 	gr_set_current_canvas(old);
@@ -285,6 +315,13 @@ void nm_string_slider( int w1,int x, int y, char * s )
 void nm_string_black( int w1,int x, int y, char * s )
 {
 	int w,h,aw;
+#if defined(RT_METAL)
+	static int s_nm_string_black_log = 0;
+	if (s_nm_string_black_log < 20) {
+		fprintf(stderr, "[Metal] nm_string_black: w1=%d x=%d y=%d text=\"%s\"\n", w1, x, y, s ? s : "");
+		++s_nm_string_black_log;
+	}
+#endif
 	gr_get_string_size(s, &w, &h, &aw  );
 
 	if (w1 == 0) w1 = w;
@@ -1540,15 +1577,14 @@ int newmenu_handler(window *wind, d_event *event, newmenu *menu)
 			RT_BeginFrame();
 			RT_StartImGuiFrame();
 #endif
-
-			state = newmenu_draw(wind, menu);
-
+			{
+				int state = newmenu_draw(wind, menu);
 #if defined(RT_DX12) || defined(RT_METAL)
-			RT_EndImguiFrame();
-			RT_EndFrame();
+				RT_EndImguiFrame();
+				RT_EndFrame();
 #endif
-			return state;
-			break;
+				return state;
+			}
 
 		case EVENT_WINDOW_CLOSE:
 			d_free(menu);
@@ -2126,8 +2162,19 @@ int listbox_handler(window *wind, d_event *event, listbox *lb)
 			break;
 
 		case EVENT_WINDOW_DRAW:
-			return listbox_draw(wind, lb);
-			break;
+#if defined(RT_DX12) || defined(RT_METAL)
+			RT_GetRendererIO()->delta_time = f2fl(FrameTime);
+			RT_BeginFrame();
+			RT_StartImGuiFrame();
+#endif
+			{
+				int result = listbox_draw(wind, lb);
+#if defined(RT_DX12) || defined(RT_METAL)
+				RT_EndImguiFrame();
+				RT_EndFrame();
+#endif
+				return result;
+			}
 
 		case EVENT_WINDOW_CLOSE:
 			d_free(lb);

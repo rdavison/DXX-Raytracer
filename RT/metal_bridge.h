@@ -30,6 +30,7 @@ void metal_upixelc(int x, int y, int c);
 void metal_drawcircle(int nsides, RT_Mat4* transform, RT_Vec4* col);
 bool metal_ubitmapm_cs(int x, int y, int dw, int dh, grs_bitmap* bm, int c, int scale);
 bool metal_ubitblt(int dw, int dh, int dx, int dy, int sw, int sh, int sx, int sy, grs_bitmap* src, grs_bitmap* dst, int texfilt);
+void metal_debug_get_and_reset_draw_counts(uint64_t* urect, uint64_t* ubitmap, uint64_t* ubitblt);
 
 #ifdef RT_METAL
 #define dx12_start_frame         metal_start_frame

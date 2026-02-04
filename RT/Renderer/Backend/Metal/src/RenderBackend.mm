@@ -9,6 +9,8 @@
 #include "imgui_internal.h"
 #include "cimgui.h"
 #include "imgui_impl_metal.h"
+#include <stdint.h>
+
 #include <math.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <cstdlib>
@@ -448,10 +450,8 @@ namespace RenderBackend
 		g_mtl.metal_layer.device = g_mtl.device;
 		g_mtl.metal_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
 		g_mtl.metal_layer.framebufferOnly = YES;
-		// g_mtl.metal_layer.drawableSize will be set in Resize or automatically if not set? 
-		// Usually good to set it to match the view's pixel size.
-		// For now we'll rely on layout or set it if we have dimensions.
-		
+		g_mtl.metal_layer.displaySyncEnabled = YES; // Enable V-Sync to prevent tearing/flickering
+
 		[view setLayer:g_mtl.metal_layer];
 
 		// We assume params->width/height might be useful?
@@ -509,9 +509,15 @@ namespace RenderBackend
 		// Stub
 	}
 
+	static bool g_frame_begun = false;
+
 	void BeginFrame()
 	{
-		dispatch_semaphore_wait(g_mtl.frame_semaphore, DISPATCH_TIME_FOREVER);
+		if (!g_frame_begun)
+		{
+			dispatch_semaphore_wait(g_mtl.frame_semaphore, DISPATCH_TIME_FOREVER);
+			g_frame_begun = true;
+		}
 	}
 
 	void BeginScene(const RT_SceneSettings* scene_settings)
@@ -532,16 +538,12 @@ namespace RenderBackend
 
 	void EndFrame()
 	{
-		static double start_time_seconds = 0.0;
-		if (start_time_seconds == 0.0)
-		{
-			start_time_seconds = CFAbsoluteTimeGetCurrent();
-		}
-		if (CFAbsoluteTimeGetCurrent() - start_time_seconds >= 15.0)
-		{
-			exit(0);
-		}
+		// Don't present here - presentation happens in SwapBuffers/PresentFrame
+		// This allows multiple window handlers to accumulate their drawing
+	}
 
+	void PresentFrame()
+	{
 		@autoreleasepool {
 			static bool logged_imgui_render = false;
 			bool had_raster_batches = !g_raster_batches.empty();
@@ -604,8 +606,10 @@ namespace RenderBackend
 			double now = CFAbsoluteTimeGetCurrent();
 			bool should_clear = true;
 			const bool fullscreen_cover_now = ComputeRasterFullscreenCover();
+			// Always clear for raster/UI frames to avoid undefined content showing through.
+			// Only skip clear for imgui-only frames (imgui handles its own background).
 			if (had_raster_batches)
-				should_clear = fullscreen_cover_now;
+				should_clear = true;
 			else if (had_imgui)
 				should_clear = false;
 
@@ -645,7 +649,7 @@ namespace RenderBackend
 				passDescriptor.colorAttachments[0].texture = drawable.texture;
 				passDescriptor.colorAttachments[0].loadAction = should_clear ? MTLLoadActionClear : MTLLoadActionLoad;
 				passDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
-				passDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.392, 0.584, 0.929, 1.0); // Cornflower Blue
+				passDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0); // Black
 
 				id<MTLCommandBuffer> commandBuffer = [g_mtl.command_queue commandBuffer];
 				
@@ -655,7 +659,8 @@ namespace RenderBackend
 				}
 
 				id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
-				if (!g_raster_batches.empty() && g_mtl.raster_tri_pipeline)
+				if ((!g_raster_batches.empty() || !g_raster_lines.empty()) &&
+					(g_mtl.raster_tri_pipeline || g_mtl.raster_line_pipeline))
 				{
 					EncodeRasterBatches(renderEncoder, drawable.texture.width, drawable.texture.height, true, true);
 				}
@@ -700,7 +705,12 @@ namespace RenderBackend
 
 	void SwapBuffers()
 	{
-		// No-op
+		// Present the accumulated frame content
+		if (g_frame_begun)
+		{
+			PresentFrame();
+			g_frame_begun = false;
+		}
 	}
 
 	void OnWindowResize(uint32_t width, uint32_t height)
@@ -945,7 +955,9 @@ namespace RenderBackend
 	}
 	void RasterRender()
 	{
-		if (g_mtl.raster_render_target && !g_raster_batches.empty() && g_mtl.raster_tri_pipeline)
+		if (g_mtl.raster_render_target &&
+			(!g_raster_batches.empty() || !g_raster_lines.empty()) &&
+			(g_mtl.raster_tri_pipeline || g_mtl.raster_line_pipeline))
 		{
 			@autoreleasepool {
 				id<MTLCommandBuffer> commandBuffer = [g_mtl.command_queue commandBuffer];

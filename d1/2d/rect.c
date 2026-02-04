@@ -20,6 +20,12 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include "gr.h"
 #include "grdef.h"
+#include <stdio.h>
+
+#if defined(RT_METAL)
+static int g_gr_rect_log_count = 0;
+static int g_gr_urect_log_count = 0;
+#endif
 
 #ifdef OGL
 #include "ogl_init.h"
@@ -28,13 +34,21 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 void gr_urect(int left,int top,int right,int bot)
 {
+#if defined(RT_METAL)
+	if (g_gr_urect_log_count < 50) {
+		int w = right - left + 1;
+		int h = bot - top + 1;
+		fprintf(stderr, "[Metal] gr_urect: w=%d h=%d type=%d\n", w, h, (int)TYPE);
+		++g_gr_urect_log_count;
+	}
+#endif
 #ifdef OGL
 	if (TYPE == BM_OGL) {
 		ogl_urect(left,top,right,bot);
 		return;
 	}
 #elif defined(RT_DX12) || defined(RT_METAL)
-	if (TYPE == BM_OGL) {
+	if (TYPE == BM_OGL || TYPE == BM_RTDX12) {
 		dx12_urect(left, top, right, bot);
 		return;
 	}
@@ -50,13 +64,21 @@ void gr_rect(int left,int top,int right,int bot)
 {
 	int i;
 
+#if defined(RT_METAL)
+	if (g_gr_rect_log_count < 50) {
+		int w = right - left + 1;
+		int h = bot - top + 1;
+		fprintf(stderr, "[Metal] gr_rect: w=%d h=%d type=%d\n", w, h, (int)TYPE);
+		++g_gr_rect_log_count;
+	}
+#endif
 #ifdef OGL
 	if (TYPE == BM_OGL) {
 		ogl_urect(left,top,right,bot);
 		return;
 	}
 #elif defined(RT_DX12) || defined(RT_METAL)
-	if (TYPE == BM_OGL) {
+	if (TYPE == BM_OGL || TYPE == BM_RTDX12) {
 		dx12_urect(left, top, right, bot);
 		return;
 	}

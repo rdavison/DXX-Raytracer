@@ -73,6 +73,11 @@ typedef struct _grs_point {
 #define BM_OGL      5
 #define BM_RGBA8    6
 #endif /* def OGL */
+#if defined(RT_DX12) || defined(RT_METAL)
+#ifndef BM_RTDX12
+#define BM_RTDX12 BM_OGL
+#endif
+#endif
 
 #define SM(w,h) ((((u_int32_t)w)<<16)+(((u_int32_t)h)&0xFFFF))
 #define SM_W(m) (m>>16)

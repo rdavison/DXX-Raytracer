@@ -10,6 +10,7 @@
 #include "grdef.h"
 #include "globvars.h"
 #include "SDL.h"
+#include <stdio.h>
 
 int get_centered_x(const char *s);
 void get_char_width(ubyte c, ubyte c2, int *width, int *spacing);
@@ -38,6 +39,12 @@ static double g_last_frame_log_time = 0.0;
 static uint64_t g_urect_calls = 0;
 static uint64_t g_ubitblt_calls = 0;
 static uint64_t g_ubitmap_calls = 0;
+static uint32_t g_frame_log_count = 0;
+static uint32_t g_urect_log_count = 0;
+static uint32_t g_urect_large_log_count = 0;
+static uint32_t g_ubitmap_log_count = 0;
+static uint32_t g_ubitmap_sub_log_count = 0;
+static uint32_t g_ubitmap_target_log_count = 0;
 
 void metal_start_frame()
 {
@@ -50,27 +57,36 @@ void metal_start_frame()
 	projection_matrix = RT_Mat4Perspective(RT_RadiansFromDegrees(90.0f), 1.0f, 0.1f, 5000.0f);
 
 	{
-		double now = (double)SDL_GetTicks() / 1000.0;
-		if (now - g_last_frame_log_time >= 1.0)
+		if (g_frame_log_count < 5 || (g_frame_log_count % 60) == 0)
 		{
-			RT_LOGF(RT_LOGSERVERITY_INFO,
-				"[Metal] Frame: last=%dx%d screen=%dx%d canvas=%dx%d viewport=%.0fx%.0f fnt=%d/%d urect=%llu ubitmap=%llu ubitblt=%llu",
+			fprintf(stderr,
+				"[Metal] Frame: last=%dx%d screen=%dx%d canvas=%dx%d viewport=%.0fx%.0f fnt=%.2f/%.2f urect=%llu ubitmap=%llu ubitblt=%llu\n",
 				last_width, last_height,
 				grd_curscreen->sc_w, grd_curscreen->sc_h,
 				grd_curcanv ? grd_curcanv->cv_bitmap.bm_w : 0,
 				grd_curcanv ? grd_curcanv->cv_bitmap.bm_h : 0,
 				grd_curscreen ? (float)grd_curscreen->sc_w : 0.0f,
 				grd_curscreen ? (float)grd_curscreen->sc_h : 0.0f,
-				FNTScaleX, FNTScaleY,
+				(double)FNTScaleX, (double)FNTScaleY,
 				(unsigned long long)g_urect_calls,
 				(unsigned long long)g_ubitmap_calls,
 				(unsigned long long)g_ubitblt_calls);
-			g_urect_calls = 0;
-			g_ubitmap_calls = 0;
-			g_ubitblt_calls = 0;
-			g_last_frame_log_time = now;
 		}
+		++g_frame_log_count;
 	}
+}
+
+void metal_debug_get_and_reset_draw_counts(uint64_t* urect, uint64_t* ubitmap, uint64_t* ubitblt)
+{
+	if (urect)
+		*urect = g_urect_calls;
+	if (ubitmap)
+		*ubitmap = g_ubitmap_calls;
+	if (ubitblt)
+		*ubitblt = g_ubitblt_calls;
+	g_urect_calls = 0;
+	g_ubitmap_calls = 0;
+	g_ubitblt_calls = 0;
 }
 
 void metal_end_frame()
@@ -541,6 +557,41 @@ void metal_init_font(grs_font* font)
 void metal_urect(int left, int top, int right, int bot)
 {
 	g_urect_calls++;
+	if (g_urect_log_count < 10)
+	{
+		fprintf(stderr,
+			"[Metal] urect: l=%d t=%d r=%d b=%d type=%d fade=%d blend=%d color=%d canvas=%dx%d off=%d,%d\n",
+			left, top, right, bot,
+			(int)grd_curcanv->cv_bitmap.bm_type,
+			(int)grd_curcanv->cv_fade_level,
+			(int)grd_curcanv->cv_blend_func,
+			(int)grd_curcanv->cv_color,
+			(int)grd_curcanv->cv_bitmap.bm_w,
+			(int)grd_curcanv->cv_bitmap.bm_h,
+			(int)grd_curcanv->cv_bitmap.bm_x,
+			(int)grd_curcanv->cv_bitmap.bm_y);
+		++g_urect_log_count;
+	}
+	if (g_urect_large_log_count < 20)
+	{
+		int w = right - left + 1;
+		int h = bot - top + 1;
+		if (w >= 20 && h >= 20)
+		{
+			fprintf(stderr,
+				"[Metal] urect_large: x=%d y=%d w=%d h=%d type=%d fade=%d blend=%d color=%d canvas=%dx%d off=%d,%d\n",
+				left, top, w, h,
+				(int)grd_curcanv->cv_bitmap.bm_type,
+				(int)grd_curcanv->cv_fade_level,
+				(int)grd_curcanv->cv_blend_func,
+				(int)grd_curcanv->cv_color,
+				(int)grd_curcanv->cv_bitmap.bm_w,
+				(int)grd_curcanv->cv_bitmap.bm_h,
+				(int)grd_curcanv->cv_bitmap.bm_x,
+				(int)grd_curcanv->cv_bitmap.bm_y);
+			++g_urect_large_log_count;
+		}
+	}
 	float xo, yo, xf, yf, color_r, color_g, color_b, color_a;
 	int c = grd_curcanv->cv_color;
 
@@ -1004,6 +1055,44 @@ bool metal_ubitmapm_cs(int x, int y, int dw, int dh, grs_bitmap* bm, int c, int 
 	else if (dh == 0)
 		dh = bm->bm_h;
 
+	if (g_ubitmap_log_count < 40)
+	{
+		fprintf(stderr,
+			"[Metal] ubitmap: x=%d y=%d dw=%d dh=%d bm=%dx%d off=%d,%d parent=%p scale=%d\n",
+			x, y, dw, dh,
+			bm ? bm->bm_w : 0,
+			bm ? bm->bm_h : 0,
+			bm ? bm->bm_x : 0,
+			bm ? bm->bm_y : 0,
+			bm ? (void*)bm->bm_parent : NULL,
+			scale);
+		++g_ubitmap_log_count;
+	}
+	if (g_ubitmap_sub_log_count < 100 && bm && (bm->bm_x != 0 || bm->bm_y != 0 || bm->bm_parent))
+	{
+		fprintf(stderr,
+			"[Metal] ubitmap_sub: x=%d y=%d dw=%d dh=%d bm=%dx%d off=%d,%d parent=%p scale=%d\n",
+			x, y, dw, dh,
+			bm->bm_w, bm->bm_h,
+			bm->bm_x, bm->bm_y,
+			(void*)bm->bm_parent,
+			scale);
+		++g_ubitmap_sub_log_count;
+	}
+	if (g_ubitmap_target_log_count < 20 && bm && bm->bm_w == 63 && bm->bm_h == 56)
+	{
+		fprintf(stderr,
+			"[Metal] ubitmap_target: x=%d y=%d dw=%d dh=%d bm=%dx%d off=%d,%d flags=0x%x handle=%llu parent=%p scale=%d\n",
+			x, y, dw, dh,
+			bm->bm_w, bm->bm_h,
+			bm->bm_x, bm->bm_y,
+			(unsigned)bm->bm_flags,
+			(unsigned long long)(bm->dxtexture ? bm->dxtexture->handle.value : 0),
+			(void*)bm->bm_parent,
+			scale);
+		++g_ubitmap_target_log_count;
+	}
+
 	h = (double)scale / (double)F1_0;
 
 	xo = x / ((double)last_width * h);
@@ -1051,14 +1140,11 @@ bool metal_ubitmapm_cs(int x, int y, int dw, int dh, grs_bitmap* bm, int c, int 
 		color_b = CPAL2Tb(c);
 	}
 
-	//NOTE (sam)
-	//the normal fade calculation does not seem to work here. The calculation is on the bottom of the comments..
-	//so I just check that if the fade level is 0 then do not fade. Seems to be consistent with the code here.
-	//color_a = 1.0f - (float)grd_curcanv->cv_fade_level / ((float)GR_FADE_LEVELS - 1.0)
-	if (grd_curcanv->cv_fade_level >= GR_FADE_OFF || grd_curcanv->cv_fade_level == 0)
-		color_a = 1.0;
+	// Match the 2D rect fade behavior: lower fade level => more transparent.
+	if (grd_curcanv->cv_fade_level >= GR_FADE_OFF)
+		color_a = 1.0f;
 	else
-		color_a = (float)grd_curcanv->cv_fade_level / ((float)GR_FADE_LEVELS - 1.0);
+		color_a = 1.0f - (float)grd_curcanv->cv_fade_level / ((float)GR_FADE_LEVELS - 1.0f);
 	
 	RT_Vec4 col = { color_r, color_g, color_b, color_a };
 	RT_RasterTriVertex vertices[6] = {
