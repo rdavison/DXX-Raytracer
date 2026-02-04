@@ -1195,8 +1195,10 @@ namespace RenderBackend
 				g_mtl.raytrace_pipeline ? "yes" : "no");
 			logged_once = true;
 		}
-		if (!g_mtl.raytrace_pipeline) {
-			MetalFileLog("[Metal] RaytraceRender: no pipeline");
+		// Skip rendering if no pipeline or no instances queued
+		if (g_mtl.raytrace_instance_count == 0 || !g_mtl.raytrace_pipeline) {
+			MetalFileLog("[Metal] RaytraceRender: skip (instances=%u pipeline=%s)",
+				g_mtl.raytrace_instance_count, g_mtl.raytrace_pipeline ? "yes" : "no");
 			g_mtl.raytrace_instance_count = 0;
 			g_mtl.raytrace_pending_meshes.clear();
 			return;
@@ -1255,7 +1257,9 @@ namespace RenderBackend
 			scene->camera_forward = g_mtl.scene.camera.forward;
 			scene->camera_right = g_mtl.scene.camera.right;
 			scene->camera_up = g_mtl.scene.camera.up;
-			scene->vfov_radians = g_mtl.scene.camera.vfov * 3.14159f / 180.0f;
+			// Use vfov from camera, fallback to 60 degrees if not set
+			float vfov_degrees = g_mtl.scene.camera.vfov > 1.0f ? g_mtl.scene.camera.vfov : 60.0f;
+			scene->vfov_radians = vfov_degrees * 3.14159f / 180.0f;
 			scene->aspect_ratio = (float)w / (float)h;
 			scene->render_width = w;
 			scene->render_height = h;
