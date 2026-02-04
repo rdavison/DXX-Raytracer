@@ -351,6 +351,16 @@ void RT_RenderLevel(RT_Vec3 player_pos)
 	RT_FindAndSubmitNearbyLights(player_pos);
 
 	RT_Mat4 mat = RT_Mat4Identity();
+	{
+		static bool logged_level_submit = false;
+		if (!logged_level_submit)
+		{
+			RT_LOGF(RT_LOGSERVERITY_INFO, "RT_RenderLevel: submitting level mesh handle=%llu valid=%d",
+				(unsigned long long)g_level_resource.value,
+				RT_RESOURCE_HANDLE_VALID(g_level_resource) ? 1 : 0);
+			logged_level_submit = true;
+		}
+	}
 	RT_RaytraceMesh(g_level_resource, &mat, &mat);
 }
 

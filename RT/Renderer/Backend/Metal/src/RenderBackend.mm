@@ -14,6 +14,8 @@
 #include <math.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <cstdlib>
+#include <cstdarg>
+#include <cstdio>
 #include "Core/Config.h"
 #include <vector>
 #include <stddef.h>
@@ -181,7 +183,6 @@ fragment float4 raster_line_fs(VertexOut in [[stage_in]])
 	return in.color;
 }
 )metal";
-
 	NSError* error = nil;
 	NSString* source = [NSString stringWithUTF8String:kRasterLineShader];
 	MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
@@ -230,6 +231,157 @@ fragment float4 raster_line_fs(VertexOut in [[stage_in]])
 	}
 	return pipeline;
 }
+
+static const char* kRaytraceShader = R"metal(
+#include <metal_stdlib>
+using namespace metal;
+
+struct Triangle {
+    packed_float3 pos0;
+    packed_float3 pos1;
+    packed_float3 pos2;
+    packed_float3 normal0;
+    packed_float3 normal1;
+    packed_float3 normal2;
+    float4 tangent0;
+    float4 tangent1;
+    float4 tangent2;
+    float2 uv0;
+    float2 uv1;
+    float2 uv2;
+    uint color;
+    uint material_edge_index;
+};
+
+struct Instance {
+    float4x4 object_to_world;
+    float4x4 world_to_object;
+    uint triangle_buffer_idx;
+    uint triangle_count;
+    uint color;
+    uint _pad;
+};
+
+struct SceneConstants {
+    packed_float3 camera_position; float _pad0;
+    packed_float3 camera_forward;  float _pad1;
+    packed_float3 camera_right;    float _pad2;
+    packed_float3 camera_up;       float _pad3;
+    float vfov_radians;
+    float aspect_ratio;
+    uint render_width;
+    uint render_height;
+    uint instance_count;
+    uint total_triangles;
+    float _pad4[2];
+    uint debug_mode;
+    uint _pad5[3];
+};
+
+bool ray_tri_intersect(float3 ro, float3 rd, float3 v0, float3 v1, float3 v2,
+                       thread float& t, thread float& u, thread float& v) {
+    float3 e1 = v1 - v0, e2 = v2 - v0;
+    float3 h = cross(rd, e2);
+    float a = dot(e1, h);
+    if (abs(a) < 1e-7) return false;
+    float f = 1.0 / a;
+    float3 s = ro - v0;
+    u = f * dot(s, h);
+    if (u < 0 || u > 1) return false;
+    float3 q = cross(s, e1);
+    v = f * dot(rd, q);
+    if (v < 0 || u + v > 1) return false;
+    t = f * dot(e2, q);
+    return t > 0.001;
+}
+
+kernel void raytrace_main(
+    texture2d<float, access::write> output [[texture(0)]],
+    constant SceneConstants& scene [[buffer(0)]],
+    constant Instance* instances [[buffer(1)]],
+    constant Triangle* triangles [[buffer(2)]],
+    device atomic_uint* hit_counter [[buffer(3)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= scene.render_width || gid.y >= scene.render_height) return;
+
+    // debug_mode==2 was used for camera buffer validation; fall through for normal tracing.
+
+    float2 ndc = float2(
+        (float(gid.x) + 0.5) / float(scene.render_width) * 2.0 - 1.0,
+        1.0 - (float(gid.y) + 0.5) / float(scene.render_height) * 2.0
+    );
+
+    float half_h = tan(scene.vfov_radians * 0.5);
+    if (half_h < 0.0001f) {
+        // Fallback to a 90-degree vertical FOV when the game hasn't set one yet.
+        half_h = 1.0f;
+    }
+    float3 rd = normalize(scene.camera_forward +
+                          scene.camera_right * (ndc.x * half_h * scene.aspect_ratio) +
+                          scene.camera_up * (ndc.y * half_h));
+    float3 ro = scene.camera_position;
+
+    float closest_t = 1e30;
+    float3 hit_normal = float3(0);
+    float4 hit_color = float4(0);
+
+    if (scene.debug_mode != 0) {
+        float3 v0 = scene.camera_position + (scene.camera_forward) * 5.0 + scene.camera_right * -1.0 + scene.camera_up * -1.0;
+        float3 v1 = scene.camera_position + (scene.camera_forward) * 5.0 + scene.camera_right *  1.0 + scene.camera_up * -1.0;
+        float3 v2 = scene.camera_position + (scene.camera_forward) * 5.0 + scene.camera_right *  0.0 + scene.camera_up *  1.0;
+        float t, u, v;
+        if (ray_tri_intersect(ro, rd, v0, v1, v2, t, u, v)) {
+            closest_t = t;
+            hit_normal = normalize(cross(v1 - v0, v2 - v0));
+            hit_color = float4(1, 0, 1, 1);
+        }
+    }
+
+    uint tri_offset = 0;
+    for (uint i = 0; i < scene.instance_count; i++) {
+        constant Instance& inst = instances[i];
+        float4x4 obj_to_world = inst.object_to_world;
+        // Treat triangle positions as already in world space for now.
+        float3 obj_ro = ro;
+        float3 obj_rd = rd;
+
+        for (uint j = 0; j < inst.triangle_count; j++) {
+            constant Triangle& tri = triangles[tri_offset + j];
+            float t, u, v;
+            float3 p0 = float3(tri.pos0);
+            float3 p1 = float3(tri.pos1);
+            float3 p2 = float3(tri.pos2);
+            if (ray_tri_intersect(obj_ro, obj_rd, p0, p1, p2, t, u, v)) {
+                if (t < closest_t) {
+                    closest_t = t;
+                    float w = 1.0 - u - v;
+                    float3 n0 = float3(tri.normal0);
+                    float3 n1 = float3(tri.normal1);
+                    float3 n2 = float3(tri.normal2);
+                    float3 n = normalize(n0*w + n1*u + n2*v);
+                    hit_normal = n;
+                    uint c = tri.color ? tri.color : inst.color;
+                    hit_color = float4(float(c&0xFF)/255.0, float((c>>8)&0xFF)/255.0,
+                                       float((c>>16)&0xFF)/255.0, 1.0);
+                }
+            }
+        }
+        tri_offset += inst.triangle_count;
+    }
+
+    float4 color;
+    if (closest_t < 1e29) {
+        atomic_fetch_add_explicit(hit_counter, 1, memory_order_relaxed);
+        float ndotl = max(0.0f, dot(hit_normal, normalize(float3(0.5,1,0.3))));
+        color = float4(hit_color.rgb * (0.2 + 0.8*ndotl), 1);
+    } else {
+        float sky_t = rd.y * 0.5 + 0.5;
+        color = float4(mix(float3(0.1,0.1,0.2), float3(0.5,0.7,1.0), sky_t), 1);
+    }
+    output.write(color, gid);
+}
+)metal";
 
 static id<MTLTexture> CreateWhiteTexture(id<MTLDevice> device)
 {
@@ -419,11 +571,29 @@ static void LogImGuiRenderProof()
 	}
 }
 
+static void MetalFileLog(const char* fmt, ...)
+{
+	static FILE* file = nullptr;
+	if (!file)
+	{
+		file = fopen("metal_rt.log", "a");
+		if (!file)
+			return;
+	}
+	va_list args;
+	va_start(args, fmt);
+	vfprintf(file, fmt, args);
+	fprintf(file, "\n");
+	fflush(file);
+	va_end(args);
+}
+
 namespace RenderBackend
 {
 	void Init(const RT_RendererInitParams* params)
 	{
 		g_mtl.arena = params->arena;
+		MetalFileLog("[Metal] Init: start");
 
 		NSWindow* window = (__bridge NSWindow*)params->window_handle;
 		g_mtl.window = window;
@@ -432,14 +602,21 @@ namespace RenderBackend
 		if (g_mtl.device)
 		{
 			MTL_LOG("Metal Device: %s", [g_mtl.device.name UTF8String]);
+			MetalFileLog("[Metal] Device: %s", [g_mtl.device.name UTF8String]);
 		}
 		else
 		{
 			MTL_LOG("Failed to create Metal device!");
+			MetalFileLog("[Metal] Init: failed to create device");
 			return; // Should probably fatal error here
 		}
 
 		g_mtl.command_queue = [g_mtl.device newCommandQueue];
+		if (!g_mtl.command_queue)
+		{
+			MetalFileLog("[Metal] Init: failed to create command queue");
+			return;
+		}
 		ImGui_ImplMetal_Init(g_mtl.device);
 		ImGui_ImplMetal_CreateDeviceObjects(g_mtl.device);
 
@@ -472,6 +649,9 @@ namespace RenderBackend
 		g_mtl.raster_render_target_handle = RT_RESOURCE_HANDLE_NULL;
 		g_mtl.raster_tri_pipeline = CreateRasterTriPipeline(g_mtl.device);
 		g_mtl.raster_line_pipeline = CreateRasterLinePipeline(g_mtl.device);
+		MetalFileLog("[Metal] Init: raster pipelines tri=%s line=%s",
+			g_mtl.raster_tri_pipeline ? "yes" : "no",
+			g_mtl.raster_line_pipeline ? "yes" : "no");
 
 		MTLSamplerDescriptor* sampler_desc = [[MTLSamplerDescriptor alloc] init];
 		sampler_desc.minFilter = MTLSamplerMinMagFilterLinear;
@@ -482,6 +662,37 @@ namespace RenderBackend
 		g_mtl.raster_sampler = [g_mtl.device newSamplerStateWithDescriptor:sampler_desc];
 		g_mtl.raster_white_texture = CreateWhiteTexture(g_mtl.device);
 		g_mtl.raster_render_target = nil;
+
+		// Create raytracing compute pipeline
+		{
+			NSError* error = nil;
+			id<MTLLibrary> lib = [g_mtl.device newLibraryWithSource:
+				[NSString stringWithUTF8String:kRaytraceShader] options:nil error:&error];
+			if (lib) {
+				id<MTLFunction> fn = [lib newFunctionWithName:@"raytrace_main"];
+				if (fn) {
+					g_mtl.raytrace_pipeline = [g_mtl.device newComputePipelineStateWithFunction:fn error:&error];
+					if (g_mtl.raytrace_pipeline)
+					{
+						MTL_LOG("Raytracing pipeline created");
+						MetalFileLog("[Metal] Init: raytrace pipeline created");
+					}
+				}
+			}
+			if (!g_mtl.raytrace_pipeline) MTL_LOG("Failed to create raytrace pipeline: %s",
+				error ? error.localizedDescription.UTF8String : "unknown");
+
+			g_mtl.raytrace_instance_buffer = [g_mtl.device newBufferWithLength:
+				sizeof(RaytraceInstance) * MAX_INSTANCES options:MTLResourceStorageModeShared];
+			g_mtl.raytrace_scene_buffer = [g_mtl.device newBufferWithLength:
+				sizeof(RaytraceSceneConstants) options:MTLResourceStorageModeShared];
+			g_mtl.raytrace_stats_buffer = [g_mtl.device newBufferWithLength:
+				sizeof(uint32_t) options:MTLResourceStorageModeShared];
+			g_mtl.raytrace_instance_count = 0;
+			MetalFileLog("[Metal] Init: raytrace buffers instances=%s scene=%s",
+				g_mtl.raytrace_instance_buffer ? "yes" : "no",
+				g_mtl.raytrace_scene_buffer ? "yes" : "no");
+		}
 
 		g_mtl.io.config = RT_ArenaAllocStructNoZero(g_mtl.arena, RT_Config);
 		RT_InitializeConfig(g_mtl.io.config, g_mtl.arena);
@@ -515,6 +726,7 @@ namespace RenderBackend
 	{
 		if (!g_frame_begun)
 		{
+			MetalFileLog("[Metal] BeginFrame");
 			dispatch_semaphore_wait(g_mtl.frame_semaphore, DISPATCH_TIME_FOREVER);
 			g_frame_begun = true;
 		}
@@ -522,16 +734,51 @@ namespace RenderBackend
 
 	void BeginScene(const RT_SceneSettings* scene_settings)
 	{
+		if (!scene_settings)
+		{
+			MetalFileLog("[Metal] BeginScene: null scene_settings");
+			return;
+		}
+		MetalFileLog("[Metal] BeginScene: overrides=%ux%u",
+			scene_settings->render_width_override,
+			scene_settings->render_height_override);
 		g_mtl.scene.prev_camera = g_mtl.scene.camera;
 		if (scene_settings->camera)
 		{
 			g_mtl.scene.camera = *scene_settings->camera;
+			const RT_Vec3 cp = g_mtl.scene.camera.position;
+			const RT_Vec3 cf = g_mtl.scene.camera.forward;
+			const RT_Vec3 cr = g_mtl.scene.camera.right;
+			const RT_Vec3 cu = g_mtl.scene.camera.up;
+			MetalFileLog("[Metal] BeginScene: cam pos(%.2f %.2f %.2f) f(%.2f %.2f %.2f) r(%.2f %.2f %.2f) u(%.2f %.2f %.2f) vfov=%.2f",
+				cp.x, cp.y, cp.z, cf.x, cf.y, cf.z, cr.x, cr.y, cr.z, cu.x, cu.y, cu.z, g_mtl.scene.camera.vfov);
+		}
+		g_mtl.render_width_override = scene_settings->render_width_override;
+		g_mtl.render_height_override = scene_settings->render_height_override;
+		if (g_mtl.render_width_override > 0 && g_mtl.render_height_override > 0)
+		{
+			g_mtl.render_width = g_mtl.render_width_override;
+			g_mtl.render_height = g_mtl.render_height_override;
+		}
+		if (g_mtl.render_width == 0 || g_mtl.render_height == 0)
+		{
+			if (g_mtl.output_width > 0 && g_mtl.output_height > 0)
+			{
+				g_mtl.render_width = g_mtl.output_width;
+				g_mtl.render_height = g_mtl.output_height;
+			}
+			else
+			{
+				g_mtl.render_width = BASE_SCREEN_SIZE_X;
+				g_mtl.render_height = BASE_SCREEN_SIZE_Y;
+			}
 		}
 		g_mtl.scene.render_blit = scene_settings->render_blit;
 	}
 
 	void EndScene()
 	{
+		MetalFileLog("[Metal] EndScene");
 		RaytraceRender();
 		RasterRenderDebugLines();
 	}
@@ -545,6 +792,7 @@ namespace RenderBackend
 	void PresentFrame()
 	{
 		@autoreleasepool {
+			MetalFileLog("[Metal] PresentFrame");
 			static bool logged_imgui_render = false;
 			bool had_raster_batches = !g_raster_batches.empty();
 			bool had_imgui = g_mtl.imgui_render_requested && g_mtl.imgui_draw_data;
@@ -642,6 +890,19 @@ namespace RenderBackend
 				g_raster_line_vertices = 0;
 				g_last_line_log_time = now;
 			}
+			// Ensure raytrace output exists for the frame if the pipeline is ready.
+			if (!g_mtl.raytrace_output_texture && g_mtl.raytrace_pipeline)
+			{
+				MetalFileLog("[Metal] PresentFrame: triggering RaytraceRender (no output)");
+				RaytraceRender();
+			}
+
+			// Blit raytraced output if available
+			if (g_mtl.raytrace_output_texture && g_mtl.scene.render_blit) {
+				// Use existing RasterBlit mechanism - store texture for blit
+				g_mtl.raster_render_target = g_mtl.raytrace_output_texture;
+			}
+
 			id<CAMetalDrawable> drawable = [g_mtl.metal_layer nextDrawable];
 			if (drawable)
 			{
@@ -659,6 +920,36 @@ namespace RenderBackend
 				}
 
 				id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
+				if (g_mtl.raytrace_output_texture && g_mtl.raster_tri_pipeline)
+				{
+					RT_RasterTriVertex verts[6] = {};
+					verts[0].pos = { -1.0f, -1.0f, 0.0f };
+					verts[1].pos = {  1.0f, -1.0f, 0.0f };
+					verts[2].pos = { -1.0f,  1.0f, 0.0f };
+					verts[3].pos = {  1.0f, -1.0f, 0.0f };
+					verts[4].pos = {  1.0f,  1.0f, 0.0f };
+					verts[5].pos = { -1.0f,  1.0f, 0.0f };
+					verts[0].uv = { 0.0f, 1.0f };
+					verts[1].uv = { 1.0f, 1.0f };
+					verts[2].uv = { 0.0f, 0.0f };
+					verts[3].uv = { 1.0f, 1.0f };
+					verts[4].uv = { 1.0f, 0.0f };
+					verts[5].uv = { 0.0f, 0.0f };
+					for (int i = 0; i < 6; ++i)
+					{
+						verts[i].color = { 1.0f, 1.0f, 1.0f, 1.0f };
+						verts[i].texture_index = 0;
+					}
+
+					id<MTLBuffer> vb = [g_mtl.device newBufferWithBytes:verts
+															 length:sizeof(verts)
+															options:MTLResourceStorageModeShared];
+					[renderEncoder setRenderPipelineState:g_mtl.raster_tri_pipeline];
+					[renderEncoder setFragmentSamplerState:g_mtl.raster_sampler atIndex:0];
+					[renderEncoder setVertexBuffer:vb offset:0 atIndex:0];
+					[renderEncoder setFragmentTexture:g_mtl.raytrace_output_texture atIndex:0];
+					[renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
+				}
 				if ((!g_raster_batches.empty() || !g_raster_lines.empty()) &&
 					(g_mtl.raster_tri_pipeline || g_mtl.raster_line_pipeline))
 				{
@@ -815,8 +1106,25 @@ namespace RenderBackend
 
 	RT_ResourceHandle UploadMesh(const RT_UploadMeshParams& mesh_params)
 	{
-		MTL_STUB("UploadMesh");
-		return RT_RESOURCE_HANDLE_NULL;
+		if (!mesh_params.triangles || mesh_params.triangle_count == 0)
+			return RT_RESOURCE_HANDLE_NULL;
+
+		size_t size = sizeof(RT_Triangle) * mesh_params.triangle_count;
+		id<MTLBuffer> buf = [g_mtl.device newBufferWithBytes:mesh_params.triangles
+													  length:size
+													 options:MTLResourceStorageModeShared];
+		if (!buf) return RT_RESOURCE_HANDLE_NULL;
+
+		if (mesh_params.name)
+			buf.label = [NSString stringWithUTF8String:mesh_params.name];
+
+		MeshResource res = {};
+		res.triangle_buffer = buf;
+		res.triangle_count = (uint32_t)mesh_params.triangle_count;
+
+		RT_ResourceHandle handle = g_mesh_slotmap.Insert(res);
+		MTL_LOG("UploadMesh: %zu triangles -> handle %llu", mesh_params.triangle_count, handle.value);
+		return handle;
 	}
 
 	void ReleaseTexture(const RT_ResourceHandle texture_handle)
@@ -845,10 +1153,196 @@ namespace RenderBackend
 	void RaytraceSetVerticalOffset(float new_offset) { g_mtl.viewport_offset_y = new_offset; }
 	float RaytraceGetVerticalOffset() { return g_mtl.viewport_offset_y; }
 	uint32_t RaytraceGetCurrentLightCount() { return 0; }
-	void RaytraceMesh(const RT_RenderMeshParams& render_mesh_params) { MTL_STUB("RaytraceMesh"); }
+	void RaytraceMesh(const RT_RenderMeshParams& params)
+	{
+		if (g_mtl.raytrace_instance_count >= MAX_INSTANCES) return;
+
+		MeshResource* mesh = g_mesh_slotmap.Find(params.mesh_handle);
+		if (!mesh || !mesh->triangle_buffer) return;
+
+		RaytraceInstance* instances = (RaytraceInstance*)[g_mtl.raytrace_instance_buffer contents];
+		RaytraceInstance& inst = instances[g_mtl.raytrace_instance_count];
+
+		inst.object_to_world = params.transform ? *params.transform : RT_Mat4Identity();
+		inst.world_to_object = RT_Mat4Inverse(inst.object_to_world);
+		inst.triangle_buffer_idx = params.mesh_handle.index;
+		inst.triangle_count = mesh->triangle_count;
+		inst.color = params.color ? params.color : 0xFFFFFFFF;
+
+		g_mtl.raytrace_pending_meshes.push_back(params.mesh_handle);
+		g_mtl.raytrace_instance_count++;
+		MetalFileLog("[Metal] RaytraceMesh: queued instance %u (handle=%llu tris=%u)",
+			g_mtl.raytrace_instance_count,
+			(unsigned long long)params.mesh_handle.value,
+			mesh->triangle_count);
+		static bool logged_first_instance = false;
+		if (!logged_first_instance)
+		{
+			MTL_LOG("RaytraceMesh: first instance queued (count=%u tris=%u)",
+			g_mtl.raytrace_instance_count, mesh->triangle_count);
+		logged_first_instance = true;
+	}
+}
 	void RaytraceBillboardColored(uint16_t material_index, RT_Vec3 color, RT_Vec2 dim, RT_Vec3 pos, RT_Vec3 prev_pos) { MTL_STUB("RaytraceBillboardColored"); }
 	void RaytraceRod(uint16_t material_index, RT_Vec3 bot_p, RT_Vec3 top_p, float width) { MTL_STUB("RaytraceRod"); }
-	void RaytraceRender() { MTL_STUB("RaytraceRender"); }
+	void RaytraceRender()
+	{
+		static bool logged_once = false;
+		if (!logged_once)
+		{
+			MTL_LOG("RaytraceRender: enter (instances=%u pipeline=%s)",
+				g_mtl.raytrace_instance_count,
+				g_mtl.raytrace_pipeline ? "yes" : "no");
+			logged_once = true;
+		}
+		if (!g_mtl.raytrace_pipeline) {
+			MetalFileLog("[Metal] RaytraceRender: no pipeline");
+			g_mtl.raytrace_instance_count = 0;
+			g_mtl.raytrace_pending_meshes.clear();
+			return;
+		}
+
+		@autoreleasepool {
+			uint32_t w = g_mtl.render_width > 0 ? g_mtl.render_width :
+						 (uint32_t)g_mtl.metal_layer.drawableSize.width;
+			uint32_t h = g_mtl.render_height > 0 ? g_mtl.render_height :
+						 (uint32_t)g_mtl.metal_layer.drawableSize.height;
+			if (w == 0 || h == 0) {
+				MetalFileLog("[Metal] RaytraceRender: invalid size %ux%u", w, h);
+				g_mtl.raytrace_instance_count = 0;
+				g_mtl.raytrace_pending_meshes.clear();
+				return;
+			}
+
+			// Ensure output texture
+			if (!g_mtl.raytrace_output_texture ||
+				g_mtl.raytrace_output_texture.width != w ||
+				g_mtl.raytrace_output_texture.height != h) {
+				MTLTextureDescriptor* desc = [MTLTextureDescriptor
+					texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
+				desc.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+				desc.storageMode = MTLStorageModeShared;
+				g_mtl.raytrace_output_texture = [g_mtl.device newTextureWithDescriptor:desc];
+				MetalFileLog("[Metal] RaytraceRender: created output texture %ux%u", w, h);
+			}
+
+			// Build combined triangle buffer
+			uint32_t total_tris = 0;
+			for (uint32_t i = 0; i < g_mtl.raytrace_instance_count; i++) {
+				MeshResource* m = g_mesh_slotmap.Find(g_mtl.raytrace_pending_meshes[i]);
+				if (m) total_tris += m->triangle_count;
+			}
+
+			uint32_t alloc_tris = (total_tris > 0) ? total_tris : 1;
+			id<MTLBuffer> combined = [g_mtl.device newBufferWithLength:
+				sizeof(RT_Triangle) * alloc_tris options:MTLResourceStorageModeShared];
+			RT_Triangle* dst = (RT_Triangle*)[combined contents];
+			uint32_t offset = 0;
+
+			RaytraceInstance* instances = (RaytraceInstance*)[g_mtl.raytrace_instance_buffer contents];
+			for (uint32_t i = 0; i < g_mtl.raytrace_instance_count; i++) {
+				MeshResource* m = g_mesh_slotmap.Find(g_mtl.raytrace_pending_meshes[i]);
+				if (m && m->triangle_buffer) {
+					memcpy(dst + offset, [m->triangle_buffer contents],
+						   sizeof(RT_Triangle) * m->triangle_count);
+					offset += m->triangle_count;
+				}
+			}
+
+			// Fill scene constants
+			RaytraceSceneConstants* scene = (RaytraceSceneConstants*)[g_mtl.raytrace_scene_buffer contents];
+			scene->camera_position = g_mtl.scene.camera.position;
+			scene->camera_forward = g_mtl.scene.camera.forward;
+			scene->camera_right = g_mtl.scene.camera.right;
+			scene->camera_up = g_mtl.scene.camera.up;
+			scene->vfov_radians = g_mtl.scene.camera.vfov * 3.14159f / 180.0f;
+			scene->aspect_ratio = (float)w / (float)h;
+			scene->render_width = w;
+			scene->render_height = h;
+			scene->instance_count = g_mtl.raytrace_instance_count;
+			scene->total_triangles = total_tris;
+			scene->debug_mode = 0;
+			scene->_pad5[0] = 0;
+			scene->_pad5[1] = 0;
+			scene->_pad5[2] = 0;
+			MetalFileLog("[Metal] RaytraceRender: scene cam pos(%.2f %.2f %.2f) f(%.2f %.2f %.2f) r(%.2f %.2f %.2f) u(%.2f %.2f %.2f) vfov=%.2f debug=%u",
+				scene->camera_position.x, scene->camera_position.y, scene->camera_position.z,
+				scene->camera_forward.x, scene->camera_forward.y, scene->camera_forward.z,
+				scene->camera_right.x, scene->camera_right.y, scene->camera_right.z,
+				scene->camera_up.x, scene->camera_up.y, scene->camera_up.z,
+				scene->vfov_radians, scene->debug_mode);
+
+			if (g_mtl.raytrace_stats_buffer)
+			{
+				uint32_t* stats = (uint32_t*)[g_mtl.raytrace_stats_buffer contents];
+				*stats = 0;
+			}
+
+			// Dispatch
+			id<MTLCommandBuffer> cmd = [g_mtl.command_queue commandBuffer];
+			id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+			[enc setComputePipelineState:g_mtl.raytrace_pipeline];
+			[enc setTexture:g_mtl.raytrace_output_texture atIndex:0];
+			[enc setBuffer:g_mtl.raytrace_scene_buffer offset:0 atIndex:0];
+			[enc setBuffer:g_mtl.raytrace_instance_buffer offset:0 atIndex:1];
+			[enc setBuffer:combined offset:0 atIndex:2];
+			[enc setBuffer:g_mtl.raytrace_stats_buffer offset:0 atIndex:3];
+
+			MTLSize tpg = MTLSizeMake(8, 8, 1);
+			MTLSize groups = MTLSizeMake((w+7)/8, (h+7)/8, 1);
+			[enc dispatchThreadgroups:groups threadsPerThreadgroup:tpg];
+			[enc endEncoding];
+			[cmd commit];
+			[cmd waitUntilCompleted];
+			if (cmd.status != MTLCommandBufferStatusCompleted)
+			{
+				MetalFileLog("[Metal] RaytraceRender: command buffer status=%ld error=%s",
+					(long)cmd.status,
+					cmd.error ? cmd.error.localizedDescription.UTF8String : "none");
+			}
+
+			MTL_LOG("RaytraceRender: %u instances, %u triangles at %ux%u",
+					g_mtl.raytrace_instance_count, total_tris, w, h);
+			MetalFileLog("[Metal] RaytraceRender: %u instances, %u triangles at %ux%u",
+				g_mtl.raytrace_instance_count, total_tris, w, h);
+			if (g_mtl.raytrace_stats_buffer)
+			{
+				uint32_t* stats = (uint32_t*)[g_mtl.raytrace_stats_buffer contents];
+				uint32_t hit_count = *stats;
+				uint32_t total_pixels = w * h;
+				MTL_LOG("RaytraceRender: hits=%u of %u pixels", hit_count, total_pixels);
+				MetalFileLog("[Metal] RaytraceRender: hits=%u of %u pixels", hit_count, total_pixels);
+			}
+			{
+				static bool logged_sample_pixel = false;
+				if (!logged_sample_pixel && g_mtl.raytrace_output_texture && g_mtl.raytrace_instance_count > 0)
+				{
+					uint32_t sample_x = w / 2;
+					uint32_t sample_y = h / 2;
+					uint8_t pixel[4] = {0, 0, 0, 0};
+					MTLRegion region = MTLRegionMake2D(sample_x, sample_y, 1, 1);
+					[g_mtl.raytrace_output_texture getBytes:pixel
+												 bytesPerRow:4
+												  fromRegion:region
+												 mipmapLevel:0];
+					MetalFileLog("[Metal] RaytraceRender: sample pixel (%u,%u) = %u %u %u %u",
+						sample_x, sample_y, pixel[0], pixel[1], pixel[2], pixel[3]);
+					logged_sample_pixel = true;
+				}
+			}
+			{
+				const RT_Vec3 cp = g_mtl.scene.camera.position;
+				const RT_Vec3 cf = g_mtl.scene.camera.forward;
+				const RT_Vec3 cr = g_mtl.scene.camera.right;
+				const RT_Vec3 cu = g_mtl.scene.camera.up;
+				MTL_LOG("RaytraceRender: cam pos(%.2f %.2f %.2f) f(%.2f %.2f %.2f) r(%.2f %.2f %.2f) u(%.2f %.2f %.2f)",
+					cp.x, cp.y, cp.z, cf.x, cf.y, cf.z, cr.x, cr.y, cr.z, cu.x, cu.y, cu.z);
+			}
+		}
+
+		g_mtl.raytrace_instance_count = 0;
+		g_mtl.raytrace_pending_meshes.clear();
+	}
 	void RaytraceSetSkyColors(RT_Vec3 top, RT_Vec3 bottom) { MTL_STUB("RaytraceSetSkyColors"); }
 
 	// Rasterization stubs

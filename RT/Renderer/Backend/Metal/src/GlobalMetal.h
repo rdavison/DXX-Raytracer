@@ -10,6 +10,9 @@
 #include "Renderer.h"
 #include "MeshTracker.hpp"
 
+#include <cstddef>
+#include <vector>
+
 #ifdef __OBJC__
 #include <dispatch/dispatch.h>
 #endif
@@ -38,12 +41,45 @@ namespace RT
 	struct MeshResource
 	{
 #ifdef __OBJC__
-		id<MTLBuffer> vertex_buffer;
+		id<MTLBuffer> triangle_buffer;
 #else
-		id vertex_buffer;
+		id triangle_buffer;
 #endif
 		uint32_t triangle_count;
 	};
+
+	// GPU-compatible instance data for raytracing
+	struct RaytraceInstance
+	{
+		RT_Mat4 object_to_world;
+		RT_Mat4 world_to_object;
+		uint32_t triangle_buffer_idx;  // Index into mesh slotmap
+		uint32_t triangle_count;
+		uint32_t color;
+		uint32_t _pad;
+	};
+
+	// Scene constants for compute shader
+	struct RaytraceSceneConstants
+	{
+		RT_Vec3 camera_position;  float _pad0;
+		RT_Vec3 camera_forward;   float _pad1;
+		RT_Vec3 camera_right;     float _pad2;
+		RT_Vec3 camera_up;        float _pad3;
+		float vfov_radians;
+		float aspect_ratio;
+		uint32_t render_width;
+		uint32_t render_height;
+		uint32_t instance_count;
+		uint32_t total_triangles;
+		float _pad4[2];
+		uint32_t debug_mode;
+		uint32_t _pad5[3];
+	};
+	static_assert(sizeof(RaytraceSceneConstants) == 112, "RaytraceSceneConstants size mismatch");
+	static_assert(offsetof(RaytraceSceneConstants, render_width) == 72, "RaytraceSceneConstants render_width offset mismatch");
+	static_assert(offsetof(RaytraceSceneConstants, instance_count) == 80, "RaytraceSceneConstants instance_count offset mismatch");
+	static_assert(offsetof(RaytraceSceneConstants, debug_mode) == 96, "RaytraceSceneConstants debug_mode offset mismatch");
 
 	struct TextureResource
 	{
@@ -152,6 +188,23 @@ namespace RT
 		::ImDrawData *imgui_draw_data;
 		float imgui_last_scale_x;
 		float imgui_last_scale_y;
+
+	// Raytracing state
+#ifdef __OBJC__
+	id<MTLComputePipelineState> raytrace_pipeline;
+	id<MTLBuffer> raytrace_instance_buffer;
+	id<MTLBuffer> raytrace_scene_buffer;
+	id<MTLBuffer> raytrace_stats_buffer;
+	id<MTLTexture> raytrace_output_texture;
+#else
+	id raytrace_pipeline;
+	id raytrace_instance_buffer;
+	id raytrace_scene_buffer;
+	id raytrace_stats_buffer;
+	id raytrace_output_texture;
+#endif
+		uint32_t raytrace_instance_count;
+		std::vector<RT_ResourceHandle> raytrace_pending_meshes;
 
 		// Mesh tracking
 		MeshTracker mesh_tracker;

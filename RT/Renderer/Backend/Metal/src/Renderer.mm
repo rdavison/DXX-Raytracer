@@ -7,6 +7,25 @@
 #include "Renderer.h"
 #include "RenderBackend.h"
 #include "Core/Common.h"
+#include <cstdio>
+#include <cstdarg>
+
+static void MetalFileLog(const char* fmt, ...)
+{
+	static FILE* file = nullptr;
+	if (!file)
+	{
+		file = fopen("metal_rt.log", "a");
+		if (!file)
+			return;
+	}
+	va_list args;
+	va_start(args, fmt);
+	vfprintf(file, fmt, args);
+	fprintf(file, "\n");
+	fflush(file);
+	va_end(args);
+}
 
 //
 //
@@ -34,6 +53,13 @@ void RT_BeginScene(const RT_SceneSettings* scene_settings)
 
 void RT_EndScene(void)
 {
+	static bool logged = false;
+	if (!logged)
+	{
+		fprintf(stderr, "[Metal] RT_EndScene called\n");
+		logged = true;
+	}
+	MetalFileLog("[Metal] RT_EndScene called");
 	RenderBackend::EndScene();
 	RenderBackend::RaytraceRender();
 	RenderBackend::RasterRenderDebugLines();
@@ -225,6 +251,13 @@ void RT_RaytraceMeshColor(RT_ResourceHandle mesh, RT_Vec4 color, const RT_Mat4* 
 }
 
 void RT_RaytraceMesh(RT_ResourceHandle mesh, const RT_Mat4* transform, const RT_Mat4* prev_transform) {
+	static bool logged = false;
+	if (!logged)
+	{
+		fprintf(stderr, "[Metal] RT_RaytraceMesh called\n");
+		logged = true;
+	}
+	MetalFileLog("[Metal] RT_RaytraceMesh called");
     RT_RenderMeshParams params = {};
     params.mesh_handle = mesh;
     params.transform = transform;

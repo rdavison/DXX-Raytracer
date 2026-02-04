@@ -964,6 +964,12 @@ void RT_InitAllPolyModels(void)
 void RT_DrawPolyModel(const int meshnumber, const int signature, ubyte object_type, const vms_vector* pos, const vms_matrix* orient)
 {
 	// NOTE(daniel): This is never used, is it.
+	static bool logged_draw_polymodel = false;
+	if (!logged_draw_polymodel)
+	{
+		RT_LOGF(RT_LOGSERVERITY_INFO, "RT_DrawPolyModel: meshnumber=%d signature=%d", meshnumber, signature);
+		logged_draw_polymodel = true;
+	}
 
 	if (!RT_RESOURCE_HANDLE_VALID(mesh_handles[meshnumber]))
 	{
@@ -1004,6 +1010,12 @@ void RT_DrawSubPolyModel(RT_ResourceHandle submodel, const RT_Mat4* const submod
 {
 	if (RT_RESOURCE_HANDLE_VALID(submodel))
 	{
+		static bool logged_draw_submodel = false;
+		if (!logged_draw_submodel)
+		{
+			RT_LOGF(RT_LOGSERVERITY_INFO, "RT_DrawSubPolyModel: handle=%llu", (unsigned long long)submodel.value);
+			logged_draw_submodel = true;
+		}
 		float component = 1.0f;
 		float alpha = 1.0f;
 		if (grd_curcanv->cv_fade_level < GR_FADE_OFF)
@@ -1104,6 +1116,12 @@ void RT_DrawGLTF(const RT_GLTFNode* node, RT_Mat4 transform, RT_Mat4 prev_transf
 
 	if (node->model)
 	{
+		static bool logged_draw_gltf = false;
+		if (!logged_draw_gltf)
+		{
+			RT_LOGF(RT_LOGSERVERITY_INFO, "RT_DrawGLTF: model handle=%llu", (unsigned long long)node->model->handle.value);
+			logged_draw_gltf = true;
+		}
 		RT_GLTFModel* model = node->model;
 		RT_RaytraceMesh(model->handle, &transform, &prev_transform);
 	}

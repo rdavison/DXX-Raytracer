@@ -1604,6 +1604,21 @@ void render_frame(fix eye_offset)
 		g_cam.up = RT_Vec3Normalize(RT_Vec3FromVmsVector(View_matrix.uvec));
 		g_cam.forward = RT_Vec3Normalize(RT_Vec3FromVmsVector(View_matrix.fvec));
 		g_cam.right = RT_Vec3Normalize(RT_Vec3FromVmsVector(View_matrix.rvec));
+
+		{
+			static bool logged_cam = false;
+			if (!logged_cam)
+			{
+				RT_LOGF(RT_LOGSERVERITY_INFO,
+					"RT_BeginScene camera: pos(%.2f %.2f %.2f) f(%.2f %.2f %.2f) r(%.2f %.2f %.2f) u(%.2f %.2f %.2f) vfov=%.2f",
+					g_cam.position.x, g_cam.position.y, g_cam.position.z,
+					g_cam.forward.x, g_cam.forward.y, g_cam.forward.z,
+					g_cam.right.x, g_cam.right.y, g_cam.right.z,
+					g_cam.up.x, g_cam.up.y, g_cam.up.z,
+					g_cam.vfov);
+				logged_cam = true;
+			}
+		}
 		
 		//We still keep this code incase anything breaks due to the camera.
 		//g_cam.up = RT_Vec3FromVmsVector(Viewer->orient.uvec);
@@ -1620,6 +1635,20 @@ void render_frame(fix eye_offset)
 		g_free_cam.up = RT_Vec3Normalize(RT_Vec3FromVmsVector(View_matrix.uvec));
 		g_free_cam.forward = RT_Vec3Normalize(RT_Vec3FromVmsVector(View_matrix.fvec));
 		g_free_cam.right = RT_Vec3Normalize(RT_Vec3FromVmsVector(View_matrix.rvec));
+		{
+			static bool logged_free_cam = false;
+			if (!logged_free_cam)
+			{
+				RT_LOGF(RT_LOGSERVERITY_INFO,
+					"RT_BeginScene free cam: pos(%.2f %.2f %.2f) f(%.2f %.2f %.2f) r(%.2f %.2f %.2f) u(%.2f %.2f %.2f) vfov=%.2f",
+					g_free_cam.position.x, g_free_cam.position.y, g_free_cam.position.z,
+					g_free_cam.forward.x, g_free_cam.forward.y, g_free_cam.forward.z,
+					g_free_cam.right.x, g_free_cam.right.y, g_free_cam.right.z,
+					g_free_cam.up.x, g_free_cam.up.y, g_free_cam.up.z,
+					g_free_cam.vfov);
+				logged_free_cam = true;
+			}
+		}
 		scene_settings.camera = &g_free_cam;
 	}
 
