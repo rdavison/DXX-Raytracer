@@ -232,271 +232,8 @@ fragment float4 raster_line_fs(VertexOut in [[stage_in]])
 	return pipeline;
 }
 
-static const char* kRaytraceShader = R"metal(
-#include <metal_stdlib>
-using namespace metal;
-
-// Constants matching Renderer.h
-#define RT_TRIANGLE_HOLDS_MATERIAL_EDGE  (1u << 31)
-#define RT_TRIANGLE_HOLDS_MATERIAL_INDEX (1u << 30)
-#define RT_MAX_TEXTURES 6030
-
-struct Triangle {
-    packed_float3 pos0;
-    packed_float3 pos1;
-    packed_float3 pos2;
-    packed_float3 normal0;
-    packed_float3 normal1;
-    packed_float3 normal2;
-    // Use float arrays instead of float4 to avoid 16-byte alignment padding
-    float tangent0[4];
-    float tangent1[4];
-    float tangent2[4];
-    packed_float2 uv0;
-    packed_float2 uv1;
-    packed_float2 uv2;
-    uint color;
-    uint material_edge_index;
-};
-
-struct Instance {
-    float4x4 object_to_world;
-    float4x4 world_to_object;
-    uint triangle_buffer_idx;
-    uint triangle_count;
-    uint color;
-    uint material_override;
-};
-
-struct SceneConstants {
-    packed_float3 camera_position; float _pad0;
-    packed_float3 camera_forward;  float _pad1;
-    packed_float3 camera_right;    float _pad2;
-    packed_float3 camera_up;       float _pad3;
-    float vfov_radians;
-    float aspect_ratio;
-    uint render_width;
-    uint render_height;
-    uint instance_count;
-    uint total_triangles;
-    float _pad4[2];
-    uint debug_mode;
-    uint texture_count;
-    uint _pad5[2];
-};
-
-// GPU Material struct (matches GPUMaterial in C++)
-struct Material {
-    uint albedo_index;
-    uint normal_index;
-    uint metalness_index;
-    uint roughness_index;
-    uint emissive_index;
-    uint height_index;
-    uint flags;
-    float metalness_factor;
-    float roughness_factor;
-    uint emissive_factor;
-    uint _pad[2];
-};
-
-// MaterialEdge packed as uint (mat1 in low 16 bits, mat2 in high 16 bits)
-// Orientation is in bits 30-31 of mat2
-
-bool ray_tri_intersect(float3 ro, float3 rd, float3 v0, float3 v1, float3 v2,
-                       thread float& t, thread float& u, thread float& v) {
-    float3 e1 = v1 - v0, e2 = v2 - v0;
-    float3 h = cross(rd, e2);
-    float a = dot(e1, h);
-    if (abs(a) < 1e-7) return false;
-    float f = 1.0 / a;
-    float3 s = ro - v0;
-    u = f * dot(s, h);
-    if (u < 0 || u > 1) return false;
-    float3 q = cross(s, e1);
-    v = f * dot(rd, q);
-    if (v < 0 || u + v > 1) return false;
-    t = f * dot(e2, q);
-    return t > 0.001;
-}
-
-// Get material index from material_indices array (packed uint16s)
-uint get_material_index(constant uint* material_indices, uint material_edge) {
-    uint word_idx = material_edge >> 1;
-    uint word = material_indices[word_idx];
-    if (material_edge & 1) {
-        return (word >> 16) & 0xFFFF;
-    } else {
-        return word & 0xFFFF;
-    }
-}
-
-// Decode material_edge_index to get material index
-uint resolve_material_index(uint material_edge_index, uint material_override,
-                            constant uint* material_edges,
-                            constant uint* material_indices) {
-    if (material_override != 0) {
-        return material_override;
-    }
-
-    if (material_edge_index & RT_TRIANGLE_HOLDS_MATERIAL_INDEX) {
-        return material_edge_index & ~RT_TRIANGLE_HOLDS_MATERIAL_INDEX;
-    }
-
-    if (material_edge_index & RT_TRIANGLE_HOLDS_MATERIAL_EDGE) {
-        uint edge_idx = material_edge_index & ~RT_TRIANGLE_HOLDS_MATERIAL_EDGE;
-        return get_material_index(material_indices, edge_idx);
-    }
-
-    // Normal case: look up in material_edges, then material_indices
-    uint edge = material_edges[material_edge_index];
-    uint mat1 = edge & 0xFFFF;
-    return get_material_index(material_indices, mat1);
-}
-
-// Interpolate UV coordinates from barycentric
-float2 interpolate_uv(float2 uv0, float2 uv1, float2 uv2, float u, float v) {
-    float w = 1.0 - u - v;
-    return uv0 * w + uv1 * u + uv2 * v;
-}
-
-// Use 31 textures max (Metal compute shader limit without argument buffers)
-#define MAX_BOUND_TEXTURES 31
-
-kernel void raytrace_main(
-    texture2d<float, access::write> output [[texture(0)]],
-    array<texture2d<float>, MAX_BOUND_TEXTURES> textures [[texture(1)]],
-    sampler tex_sampler [[sampler(0)]],
-    constant SceneConstants& scene [[buffer(0)]],
-    constant Instance* instances [[buffer(1)]],
-    constant Triangle* triangles [[buffer(2)]],
-    device atomic_uint* hit_counter [[buffer(3)]],
-    constant Material* materials [[buffer(4)]],
-    constant uint* material_edges [[buffer(5)]],
-    constant uint* material_indices [[buffer(6)]],
-    constant uint* texture_remap [[buffer(7)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= scene.render_width || gid.y >= scene.render_height) return;
-
-    float2 ndc = float2(
-        (float(gid.x) + 0.5) / float(scene.render_width) * 2.0 - 1.0,
-        1.0 - (float(gid.y) + 0.5) / float(scene.render_height) * 2.0
-    );
-
-    float half_h = tan(scene.vfov_radians * 0.5);
-    if (half_h < 0.0001f) {
-        half_h = 1.0f;
-    }
-    float3 rd = normalize(scene.camera_forward +
-                          scene.camera_right * (ndc.x * half_h * scene.aspect_ratio) +
-                          scene.camera_up * (ndc.y * half_h));
-    float3 ro = scene.camera_position;
-
-    float closest_t = 1e30;
-    float3 hit_normal = float3(0);
-    float4 hit_color = float4(0);
-    float2 hit_uv = float2(0);
-    uint hit_material_index = 0;
-    uint hit_instance_material_override = 0;
-
-    uint tri_offset = 0;
-    for (uint i = 0; i < scene.instance_count; i++) {
-        constant Instance& inst = instances[i];
-
-        float4x4 w2o = transpose(inst.world_to_object);
-        float4x4 o2w = transpose(inst.object_to_world);
-
-        float3 obj_ro = (w2o * float4(ro, 1.0)).xyz;
-        float3 obj_rd = normalize((w2o * float4(rd, 0.0)).xyz);
-
-        for (uint j = 0; j < inst.triangle_count; j++) {
-            constant Triangle& tri = triangles[tri_offset + j];
-            float t, u, v;
-            float3 p0 = float3(tri.pos0);
-            float3 p1 = float3(tri.pos1);
-            float3 p2 = float3(tri.pos2);
-            if (ray_tri_intersect(obj_ro, obj_rd, p0, p1, p2, t, u, v)) {
-                float3 obj_hit = obj_ro + obj_rd * t;
-                float3 world_hit = (o2w * float4(obj_hit, 1.0)).xyz;
-                float world_t = length(world_hit - ro);
-
-                if (world_t < closest_t) {
-                    closest_t = world_t;
-                    float w_bary = 1.0 - u - v;
-
-                    // Interpolate normal
-                    float3 n0 = float3(tri.normal0);
-                    float3 n1 = float3(tri.normal1);
-                    float3 n2 = float3(tri.normal2);
-                    float3 obj_normal = normalize(n0*w_bary + n1*u + n2*v);
-                    hit_normal = normalize((inst.world_to_object * float4(obj_normal, 0.0)).xyz);
-
-                    // Interpolate UV
-                    hit_uv = interpolate_uv(float2(tri.uv0), float2(tri.uv1), float2(tri.uv2), u, v);
-
-                    // Store material info for later lookup
-                    hit_material_index = tri.material_edge_index;
-                    hit_instance_material_override = inst.material_override;
-
-                    // Fallback color from vertex/instance
-                    uint c = tri.color ? tri.color : inst.color;
-                    hit_color = float4(float(c&0xFF)/255.0, float((c>>8)&0xFF)/255.0,
-                                       float((c>>16)&0xFF)/255.0, 1.0);
-                }
-            }
-        }
-        tri_offset += inst.triangle_count;
-    }
-
-    float4 color;
-    if (closest_t < 1e29) {
-        atomic_fetch_add_explicit(hit_counter, 1, memory_order_relaxed);
-
-        // Resolve material and sample texture
-        uint mat_idx = resolve_material_index(hit_material_index, hit_instance_material_override,
-                                              material_edges, material_indices);
-
-        // Clamp material index to valid range
-        mat_idx = min(mat_idx, (uint)(RT_MAX_TEXTURES - 1));
-
-        // Get material and sample albedo texture
-        constant Material& mat = materials[mat_idx];
-        uint tex_idx = mat.albedo_index;
-
-        // Sample texture if valid index and textures are bound
-        float4 albedo = hit_color;
-
-        // DEBUG: Visualize UVs as colors to verify UV interpolation
-        // Comment this out once textures are working
-        if (scene.debug_mode == 1) {
-            albedo = float4(fract(hit_uv.x), fract(hit_uv.y), 0.5, 1.0);
-        }
-        // DEBUG: Visualize material index as color
-        else if (scene.debug_mode == 2) {
-            float hue = fract(float(mat_idx) * 0.1);
-            albedo = float4(hue, 1.0 - hue, fract(hue * 3.0), 1.0);
-        }
-        else if (tex_idx > 0 && tex_idx < RT_MAX_TEXTURES) {
-            // Look up remapped slot from texture_remap table
-            uint slot = texture_remap[tex_idx];
-            if (slot > 0 && slot < MAX_BOUND_TEXTURES) {
-                albedo = textures[slot].sample(tex_sampler, hit_uv);
-                // Premultiply with vertex color for tinting
-                albedo.rgb *= hit_color.rgb;
-            }
-        }
-
-        // Simple lighting
-        float ndotl = max(0.0f, dot(hit_normal, normalize(float3(0.5,1,0.3))));
-        color = float4(albedo.rgb * (0.2 + 0.8*ndotl), 1);
-    } else {
-        float sky_t = rd.y * 0.5 + 0.5;
-        color = float4(mix(float3(0.1,0.1,0.2), float3(0.5,0.7,1.0), sky_t), 1);
-    }
-    output.write(color, gid);
-}
-)metal";
+// Raytrace shader source is in RaytraceShader.h
+#include "RaytraceShader.h"
 
 static id<MTLTexture> CreateWhiteTexture(id<MTLDevice> device)
 {
@@ -782,21 +519,32 @@ namespace RenderBackend
 		// Create raytracing compute pipeline
 		{
 			NSError* error = nil;
+			MTLCompileOptions* rtOptions = [[MTLCompileOptions alloc] init];
+			rtOptions.languageVersion = MTLLanguageVersion3_0;
 			id<MTLLibrary> lib = [g_mtl.device newLibraryWithSource:
-				[NSString stringWithUTF8String:kRaytraceShader] options:nil error:&error];
+				[NSString stringWithUTF8String:kRaytraceShader] options:rtOptions error:&error];
 			if (lib) {
 				id<MTLFunction> fn = [lib newFunctionWithName:@"raytrace_main"];
 				if (fn) {
-					g_mtl.raytrace_pipeline = [g_mtl.device newComputePipelineStateWithFunction:fn error:&error];
+					// Use linked pipeline descriptor to support acceleration structures
+					MTLComputePipelineDescriptor *pipeDesc = [[MTLComputePipelineDescriptor alloc] init];
+					pipeDesc.computeFunction = fn;
+					pipeDesc.linkedFunctions = [[MTLLinkedFunctions alloc] init];
+					g_mtl.raytrace_pipeline = [g_mtl.device newComputePipelineStateWithDescriptor:pipeDesc
+						options:0 reflection:nil error:&error];
 					if (g_mtl.raytrace_pipeline)
 					{
-						MTL_LOG("Raytracing pipeline created");
-						MetalFileLog("[Metal] Init: raytrace pipeline created");
+						MTL_LOG("Raytracing pipeline created (Metal 3.0 with accel struct support)");
+						MetalFileLog("[Metal] Init: raytrace pipeline created with acceleration structure support");
 					}
 				}
 			}
-			if (!g_mtl.raytrace_pipeline) MTL_LOG("Failed to create raytrace pipeline: %s",
-				error ? error.localizedDescription.UTF8String : "unknown");
+			if (!g_mtl.raytrace_pipeline) {
+				MTL_LOG("Failed to create raytrace pipeline: %s",
+					error ? error.localizedDescription.UTF8String : "unknown");
+				MetalFileLog("[Metal] Init: raytrace pipeline FAILED: %s",
+					error ? error.localizedDescription.UTF8String : "unknown");
+			}
 
 			g_mtl.raytrace_instance_buffer = [g_mtl.device newBufferWithLength:
 				sizeof(RaytraceInstance) * MAX_INSTANCES options:MTLResourceStorageModeShared];
@@ -817,6 +565,11 @@ namespace RenderBackend
 			g_mtl.raytrace_texture_remap_buffer = [g_mtl.device newBufferWithLength:
 				sizeof(uint32_t) * RT_MAX_TEXTURES options:MTLResourceStorageModeShared];
 			g_mtl.raytrace_materials_dirty = true;
+
+			// Light buffer
+			g_mtl.raytrace_light_buffer = [g_mtl.device newBufferWithLength:
+				sizeof(RT_Light) * RT_MAX_LIGHTS options:MTLResourceStorageModeShared];
+			g_mtl.raytrace_light_count = 0;
 
 			// Create texture sampler for raytracing
 			MTLSamplerDescriptor* sampler_desc = [[MTLSamplerDescriptor alloc] init];
@@ -1259,12 +1012,72 @@ namespace RenderBackend
 		if (mesh_params.name)
 			buf.label = [NSString stringWithUTF8String:mesh_params.name];
 
+		// Build position-only buffer for BLAS (3 float3 per triangle)
+		uint32_t tri_count = (uint32_t)mesh_params.triangle_count;
+		size_t pos_buf_size = tri_count * 3 * sizeof(float) * 3;
+		id<MTLBuffer> pos_buf = [g_mtl.device newBufferWithLength:pos_buf_size
+														 options:MTLResourceStorageModeShared];
+		float* pos_dst = (float*)[pos_buf contents];
+		for (uint32_t i = 0; i < tri_count; i++) {
+			const RT_Triangle& tri = mesh_params.triangles[i];
+			// Vertex 0
+			pos_dst[i * 9 + 0] = tri.pos0.x;
+			pos_dst[i * 9 + 1] = tri.pos0.y;
+			pos_dst[i * 9 + 2] = tri.pos0.z;
+			// Vertex 1
+			pos_dst[i * 9 + 3] = tri.pos1.x;
+			pos_dst[i * 9 + 4] = tri.pos1.y;
+			pos_dst[i * 9 + 5] = tri.pos1.z;
+			// Vertex 2
+			pos_dst[i * 9 + 6] = tri.pos2.x;
+			pos_dst[i * 9 + 7] = tri.pos2.y;
+			pos_dst[i * 9 + 8] = tri.pos2.z;
+		}
+
+		// Build BLAS (bottom-level acceleration structure)
+		id<MTLAccelerationStructure> blas = nil;
+		MTLAccelerationStructureTriangleGeometryDescriptor *geomDesc =
+			[MTLAccelerationStructureTriangleGeometryDescriptor descriptor];
+		geomDesc.vertexBuffer = pos_buf;
+		geomDesc.vertexStride = sizeof(float) * 3;
+		geomDesc.triangleCount = tri_count;
+
+		MTLPrimitiveAccelerationStructureDescriptor *blasDesc =
+			[MTLPrimitiveAccelerationStructureDescriptor descriptor];
+		blasDesc.geometryDescriptors = @[geomDesc];
+
+		MTLAccelerationStructureSizes sizes =
+			[g_mtl.device accelerationStructureSizesWithDescriptor:blasDesc];
+
+		blas = [g_mtl.device newAccelerationStructureWithSize:sizes.accelerationStructureSize];
+		id<MTLBuffer> scratch = [g_mtl.device newBufferWithLength:sizes.buildScratchBufferSize
+														 options:MTLResourceStorageModePrivate];
+
+		id<MTLCommandBuffer> cmdBuf = [g_mtl.command_queue commandBuffer];
+		id<MTLAccelerationStructureCommandEncoder> asEncoder =
+			[cmdBuf accelerationStructureCommandEncoder];
+		[asEncoder buildAccelerationStructure:blas
+								  descriptor:blasDesc
+							   scratchBuffer:scratch
+						 scratchBufferOffset:0];
+		[asEncoder endEncoding];
+		[cmdBuf commit];
+		[cmdBuf waitUntilCompleted];
+
+		if (cmdBuf.status != MTLCommandBufferStatusCompleted) {
+			MetalFileLog("[Metal] UploadMesh: BLAS build failed status=%ld", (long)cmdBuf.status);
+			blas = nil;
+		}
+
 		MeshResource res = {};
 		res.triangle_buffer = buf;
-		res.triangle_count = (uint32_t)mesh_params.triangle_count;
+		res.position_buffer = pos_buf;
+		res.blas = blas;
+		res.triangle_count = tri_count;
 
 		RT_ResourceHandle handle = g_mesh_slotmap.Insert(res);
-		MTL_LOG("UploadMesh: %zu triangles -> handle %llu", mesh_params.triangle_count, handle.value);
+		MTL_LOG("UploadMesh: %zu triangles -> handle %llu (blas=%s)",
+			mesh_params.triangle_count, handle.value, blas ? "yes" : "no");
 		return handle;
 	}
 
@@ -1293,11 +1106,38 @@ namespace RenderBackend
 	RT_ResourceHandle GetBillboardMesh() { return RT_RESOURCE_HANDLE_NULL; }
 	RT_ResourceHandle GetCubeMesh() { return RT_RESOURCE_HANDLE_NULL; }
 
-	// Raytracing stubs
-	void RaytraceSubmitLights(size_t size, const RT_Light* lights) { MTL_STUB("RaytraceSubmitLights"); }
+	// Raytracing
+	void RaytraceSubmitLights(size_t count, const RT_Light* lights)
+	{
+		if (!lights || count == 0 || !g_mtl.raytrace_light_buffer) return;
+		if (g_mtl.raytrace_light_count + count > RT_MAX_LIGHTS)
+			count = RT_MAX_LIGHTS - g_mtl.raytrace_light_count;
+		if (count == 0) return;
+		RT_Light* dst = (RT_Light*)[g_mtl.raytrace_light_buffer contents];
+		memcpy(dst + g_mtl.raytrace_light_count, lights, sizeof(RT_Light) * count);
+
+		// Debug: log first light's emission RGBE values (once)
+		static bool logged_lights = false;
+		if (!logged_lights && count > 0) {
+			logged_lights = true;
+			for (size_t i = 0; i < count && i < 5; i++) {
+				uint32_t rgbe = lights[i].emission;
+				int exponent = (int)(rgbe >> 27) - 20;
+				float scale = powf(2.0f, (float)exponent) / 256.0f;
+				float fr = (float)((rgbe >>  0) & 0x1FF) * scale * 1000.0f;
+				float fg = (float)((rgbe >>  9) & 0x1FF) * scale * 1000.0f;
+				float fb = (float)((rgbe >> 18) & 0x1FF) * scale * 1000.0f;
+				MetalFileLog("[Metal] Light[%zu]: rgbe=0x%08X exp=%d decoded=(%.2f, %.2f, %.2f) kind=%u pos=(%.2f, %.2f, %.2f)",
+					i, rgbe, exponent, fr, fg, fb, lights[i].kind,
+					lights[i].transform.e[0][3], lights[i].transform.e[1][3], lights[i].transform.e[2][3]);
+			}
+		}
+
+		g_mtl.raytrace_light_count += (uint32_t)count;
+	}
 	void RaytraceSetVerticalOffset(float new_offset) { g_mtl.viewport_offset_y = new_offset; }
 	float RaytraceGetVerticalOffset() { return g_mtl.viewport_offset_y; }
-	uint32_t RaytraceGetCurrentLightCount() { return 0; }
+	uint32_t RaytraceGetCurrentLightCount() { return g_mtl.raytrace_light_count; }
 	void RaytraceMesh(const RT_RenderMeshParams& params)
 	{
 		if (g_mtl.raytrace_instance_count >= MAX_INSTANCES) return;
@@ -1314,6 +1154,8 @@ namespace RenderBackend
 		inst.triangle_count = mesh->triangle_count;
 		inst.color = params.color ? params.color : 0xFFFFFFFF;
 		inst.material_override = params.material_override;
+		inst.triangle_offset = 0;  // Will be filled in RaytraceRender
+		inst._pad[0] = inst._pad[1] = inst._pad[2] = 0;
 
 		g_mtl.raytrace_pending_meshes.push_back(params.mesh_handle);
 		g_mtl.raytrace_instance_count++;
@@ -1374,7 +1216,7 @@ namespace RenderBackend
 				MetalFileLog("[Metal] RaytraceRender: created output texture %ux%u", w, h);
 			}
 
-			// Build combined triangle buffer
+			// Build combined triangle buffer and set per-instance triangle offsets
 			uint32_t total_tris = 0;
 			for (uint32_t i = 0; i < g_mtl.raytrace_instance_count; i++) {
 				MeshResource* m = g_mesh_slotmap.Find(g_mtl.raytrace_pending_meshes[i]);
@@ -1391,9 +1233,125 @@ namespace RenderBackend
 			for (uint32_t i = 0; i < g_mtl.raytrace_instance_count; i++) {
 				MeshResource* m = g_mesh_slotmap.Find(g_mtl.raytrace_pending_meshes[i]);
 				if (m && m->triangle_buffer) {
+					instances[i].triangle_offset = offset;
 					memcpy(dst + offset, [m->triangle_buffer contents],
 						   sizeof(RT_Triangle) * m->triangle_count);
 					offset += m->triangle_count;
+				}
+			}
+
+			// ============================================================
+			// Build TLAS (top-level acceleration structure)
+			// ============================================================
+			// Collect unique BLASes and build instance descriptors
+			NSMutableArray<id<MTLAccelerationStructure>> *uniqueBLASes = [NSMutableArray array];
+			std::vector<uint32_t> blas_index_map; // instance index -> index into uniqueBLASes
+
+			for (uint32_t i = 0; i < g_mtl.raytrace_instance_count; i++) {
+				MeshResource* m = g_mesh_slotmap.Find(g_mtl.raytrace_pending_meshes[i]);
+				if (m && m->blas) {
+					// Find or add this BLAS to the unique list
+					uint32_t blas_idx = (uint32_t)[uniqueBLASes count];
+					for (uint32_t j = 0; j < [uniqueBLASes count]; j++) {
+						if (uniqueBLASes[j] == m->blas) {
+							blas_idx = j;
+							break;
+						}
+					}
+					if (blas_idx == (uint32_t)[uniqueBLASes count]) {
+						[uniqueBLASes addObject:m->blas];
+					}
+					blas_index_map.push_back(blas_idx);
+				} else {
+					blas_index_map.push_back(0); // Fallback
+				}
+			}
+
+			bool tlas_built = false;
+			if ([uniqueBLASes count] > 0) {
+				// Allocate instance descriptor buffer
+				size_t desc_buf_size = sizeof(MTLAccelerationStructureInstanceDescriptor) * g_mtl.raytrace_instance_count;
+				if (!g_mtl.raytrace_instance_desc_buffer ||
+					g_mtl.raytrace_instance_desc_buffer.length < desc_buf_size) {
+					g_mtl.raytrace_instance_desc_buffer = [g_mtl.device newBufferWithLength:desc_buf_size
+						options:MTLResourceStorageModeShared];
+				}
+
+				MTLAccelerationStructureInstanceDescriptor *inst_descs =
+					(MTLAccelerationStructureInstanceDescriptor*)[g_mtl.raytrace_instance_desc_buffer contents];
+
+				for (uint32_t i = 0; i < g_mtl.raytrace_instance_count; i++) {
+					MTLAccelerationStructureInstanceDescriptor &desc = inst_descs[i];
+					const RaytraceInstance &inst = instances[i];
+
+					// Convert 4x4 object_to_world to MTLPackedFloat4x3 (top 3 rows, column-major)
+					// MTLPackedFloat4x3 has 4 columns of 3 floats each
+					desc.transformationMatrix.columns[0] = MTLPackedFloat3Make(
+						inst.object_to_world.e[0][0], inst.object_to_world.e[1][0], inst.object_to_world.e[2][0]);
+					desc.transformationMatrix.columns[1] = MTLPackedFloat3Make(
+						inst.object_to_world.e[0][1], inst.object_to_world.e[1][1], inst.object_to_world.e[2][1]);
+					desc.transformationMatrix.columns[2] = MTLPackedFloat3Make(
+						inst.object_to_world.e[0][2], inst.object_to_world.e[1][2], inst.object_to_world.e[2][2]);
+					desc.transformationMatrix.columns[3] = MTLPackedFloat3Make(
+						inst.object_to_world.e[0][3], inst.object_to_world.e[1][3], inst.object_to_world.e[2][3]);
+
+					desc.options = MTLAccelerationStructureInstanceOptionOpaque;
+					desc.mask = 0xFF;
+					desc.intersectionFunctionTableOffset = 0;
+					desc.accelerationStructureIndex = blas_index_map[i];
+				}
+
+				// Create TLAS descriptor
+				MTLInstanceAccelerationStructureDescriptor *tlasDesc =
+					[MTLInstanceAccelerationStructureDescriptor descriptor];
+				tlasDesc.instanceDescriptorBuffer = g_mtl.raytrace_instance_desc_buffer;
+				tlasDesc.instanceCount = g_mtl.raytrace_instance_count;
+				tlasDesc.instancedAccelerationStructures = uniqueBLASes;
+
+				// Query TLAS sizes
+				MTLAccelerationStructureSizes tlas_sizes =
+					[g_mtl.device accelerationStructureSizesWithDescriptor:tlasDesc];
+
+				// Allocate or reallocate TLAS
+				if (!g_mtl.raytrace_tlas ||
+					g_mtl.raytrace_tlas.size < tlas_sizes.accelerationStructureSize) {
+					g_mtl.raytrace_tlas = [g_mtl.device
+						newAccelerationStructureWithSize:tlas_sizes.accelerationStructureSize];
+				}
+
+				// Allocate or reallocate scratch buffer
+				if (!g_mtl.raytrace_tlas_scratch_buffer ||
+					g_mtl.raytrace_tlas_scratch_buffer.length < tlas_sizes.buildScratchBufferSize) {
+					g_mtl.raytrace_tlas_scratch_buffer = [g_mtl.device
+						newBufferWithLength:tlas_sizes.buildScratchBufferSize
+						options:MTLResourceStorageModePrivate];
+				}
+
+				// Build TLAS
+				id<MTLCommandBuffer> tlasCmdBuf = [g_mtl.command_queue commandBuffer];
+				id<MTLAccelerationStructureCommandEncoder> asEncoder =
+					[tlasCmdBuf accelerationStructureCommandEncoder];
+				[asEncoder buildAccelerationStructure:g_mtl.raytrace_tlas
+										  descriptor:tlasDesc
+									   scratchBuffer:g_mtl.raytrace_tlas_scratch_buffer
+								 scratchBufferOffset:0];
+				[asEncoder endEncoding];
+				[tlasCmdBuf commit];
+				[tlasCmdBuf waitUntilCompleted];
+
+				if (tlasCmdBuf.status == MTLCommandBufferStatusCompleted) {
+					tlas_built = true;
+				} else {
+					MetalFileLog("[Metal] RaytraceRender: TLAS build failed status=%ld error=%s",
+						(long)tlasCmdBuf.status,
+						tlasCmdBuf.error ? tlasCmdBuf.error.localizedDescription.UTF8String : "none");
+				}
+
+				static bool logged_tlas = false;
+				if (!logged_tlas && tlas_built) {
+					MetalFileLog("[Metal] TLAS built: %u instances, %lu unique BLASes",
+						g_mtl.raytrace_instance_count, (unsigned long)[uniqueBLASes count]);
+					logged_tlas = true;
 				}
 			}
 
@@ -1534,14 +1492,12 @@ namespace RenderBackend
 			scene->total_triangles = total_tris;
 			scene->debug_mode = 0;  // 0=normal, 1=UVs, 2=material index
 			scene->texture_count = texture_count;
-			scene->_pad5[0] = 0;
-			scene->_pad5[1] = 0;
-			MetalFileLog("[Metal] RaytraceRender: scene cam pos(%.2f %.2f %.2f) f(%.2f %.2f %.2f) r(%.2f %.2f %.2f) u(%.2f %.2f %.2f) vfov=%.2f textures=%u",
+			scene->use_accel = tlas_built ? 1 : 0;
+			scene->light_count = g_mtl.raytrace_light_count;
+			MetalFileLog("[Metal] RaytraceRender: scene cam pos(%.2f %.2f %.2f) f(%.2f %.2f %.2f) vfov=%.2f textures=%u lights=%u accel=%u",
 				scene->camera_position.x, scene->camera_position.y, scene->camera_position.z,
 				scene->camera_forward.x, scene->camera_forward.y, scene->camera_forward.z,
-				scene->camera_right.x, scene->camera_right.y, scene->camera_right.z,
-				scene->camera_up.x, scene->camera_up.y, scene->camera_up.z,
-				scene->vfov_radians, scene->texture_count);
+				scene->vfov_radians, scene->texture_count, scene->light_count, scene->use_accel);
 
 			if (g_mtl.raytrace_stats_buffer)
 			{
@@ -1567,6 +1523,10 @@ namespace RenderBackend
 			[enc setBuffer:g_mtl.raytrace_material_edges_buffer offset:0 atIndex:5];
 			[enc setBuffer:g_mtl.raytrace_material_indices_buffer offset:0 atIndex:6];
 			[enc setBuffer:g_mtl.raytrace_texture_remap_buffer offset:0 atIndex:7];
+			if (tlas_built && g_mtl.raytrace_tlas) {
+				[enc setAccelerationStructure:g_mtl.raytrace_tlas atBufferIndex:8];
+			}
+			[enc setBuffer:g_mtl.raytrace_light_buffer offset:0 atIndex:9];
 
 			MTLSize tpg = MTLSizeMake(8, 8, 1);
 			MTLSize groups = MTLSizeMake((w+7)/8, (h+7)/8, 1);
@@ -1621,6 +1581,7 @@ namespace RenderBackend
 		}
 
 		g_mtl.raytrace_instance_count = 0;
+		g_mtl.raytrace_light_count = 0;
 		g_mtl.raytrace_pending_meshes.clear();
 	}
 	void RaytraceSetSkyColors(RT_Vec3 top, RT_Vec3 bottom) { MTL_STUB("RaytraceSetSkyColors"); }

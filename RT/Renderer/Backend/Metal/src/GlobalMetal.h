@@ -42,8 +42,12 @@ namespace RT
 	{
 #ifdef __OBJC__
 		id<MTLBuffer> triangle_buffer;
+		id<MTLBuffer> position_buffer;              // float3 positions only (3 per tri, for BLAS)
+		id<MTLAccelerationStructure> blas;           // Bottom-level acceleration structure
 #else
 		id triangle_buffer;
+		id position_buffer;
+		id blas;
 #endif
 		uint32_t triangle_count;
 	};
@@ -57,6 +61,8 @@ namespace RT
 		uint32_t triangle_count;
 		uint32_t color;
 		uint32_t material_override;    // Material index override (0 = use triangle's material)
+		uint32_t triangle_offset;      // Offset into combined triangle buffer
+		uint32_t _pad[3];              // Pad to 16-byte alignment (160 bytes total)
 	};
 
 	// GPU-compatible material data (matches DX12 Material struct)
@@ -92,7 +98,8 @@ namespace RT
 		float _pad4[2];
 		uint32_t debug_mode;
 		uint32_t texture_count;
-		uint32_t _pad5[2];
+		uint32_t use_accel;         // 1 = use acceleration structure, 0 = brute force
+		uint32_t light_count;
 	};
 	static_assert(sizeof(RaytraceSceneConstants) == 112, "RaytraceSceneConstants size mismatch");
 	static_assert(offsetof(RaytraceSceneConstants, render_width) == 72, "RaytraceSceneConstants render_width offset mismatch");
@@ -221,6 +228,12 @@ namespace RT
 	id<MTLBuffer> raytrace_material_indices_buffer; // uint16_t array
 	id<MTLBuffer> raytrace_texture_remap_buffer;   // Texture index remapping table
 	id<MTLSamplerState> raytrace_sampler;          // Texture sampler
+	// Acceleration structure state
+	id<MTLAccelerationStructure> raytrace_tlas;    // Top-level acceleration structure
+	id<MTLBuffer> raytrace_instance_desc_buffer;   // MTLAccelerationStructureInstanceDescriptor array
+	id<MTLBuffer> raytrace_tlas_scratch_buffer;    // Scratch buffer for TLAS builds
+	// Light buffer
+	id<MTLBuffer> raytrace_light_buffer;           // RT_Light array
 #else
 	id raytrace_pipeline;
 	id raytrace_instance_buffer;
@@ -232,8 +245,13 @@ namespace RT
 	id raytrace_material_indices_buffer;
 	id raytrace_texture_remap_buffer;
 	id raytrace_sampler;
+	id raytrace_tlas;
+	id raytrace_instance_desc_buffer;
+	id raytrace_tlas_scratch_buffer;
+	id raytrace_light_buffer;
 #endif
 		uint32_t raytrace_instance_count;
+		uint32_t raytrace_light_count;
 		std::vector<RT_ResourceHandle> raytrace_pending_meshes;
 		bool raytrace_materials_dirty;  // Flag to rebuild material buffer
 
