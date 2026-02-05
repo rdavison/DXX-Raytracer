@@ -40,6 +40,52 @@ short m_lights_relevance_score[1024] = { 0.0f };
 short m_lights_to_sort[1024];
 int m_lights_found = 0;
 
+// Door state tracking for mesh rebuild on open/close
+static uint8_t g_prev_door_passable[MAX_WALLS];
+static bool g_door_tracking_initialized = false;
+
+// Returns true if a door is passable (rays should pass through)
+static bool RT_IsDoorPassable(wall *w)
+{
+	return (w->flags & WALL_DOOR_OPENED) || (w->state == WALL_DOOR_OPENING);
+}
+
+// Returns true if any door's passable state changed since last call
+static bool RT_DoorStatesChanged(void)
+{
+	bool changed = false;
+
+	if (!g_door_tracking_initialized)
+	{
+		for (int i = 0; i < Num_walls; i++)
+		{
+			wall *w = &Walls[i];
+			if (w->type == WALL_DOOR)
+				g_prev_door_passable[i] = RT_IsDoorPassable(w) ? 1 : 0;
+			else
+				g_prev_door_passable[i] = 0;
+		}
+		g_door_tracking_initialized = true;
+		return false;
+	}
+
+	for (int i = 0; i < Num_walls; i++)
+	{
+		wall *w = &Walls[i];
+		if (w->type != WALL_DOOR)
+			continue;
+
+		uint8_t passable_now = RT_IsDoorPassable(w) ? 1 : 0;
+		if (passable_now != g_prev_door_passable[i])
+		{
+			changed = true;
+			g_prev_door_passable[i] = passable_now;
+		}
+	}
+
+	return changed;
+}
+
 RT_Triangle RT_TriangleFromIndices(RT_Vertex* verts, int vert_offset, int v0, int v1, int v2, int tmap) 
 {
 	RT_Triangle triangle = { 0 };
@@ -198,7 +244,12 @@ RT_ResourceHandle RT_UploadLevelGeometry()
 				{
 					wall *w = &Walls[s->wall_num];
 					// TODO(daniel): What about blastable wallls?
-					if (w->type != WALL_OPEN)
+					if (w->type == WALL_DOOR)
+					{
+						bool passable = RT_IsDoorPassable(w);
+						should_render = !passable;
+					}
+					else if (w->type != WALL_OPEN)
 					{
 						should_render = true;
 					}
@@ -319,6 +370,10 @@ bool RT_UnloadLevel()
 		m_light_count = 0;
 		memset(m_lights, 0, sizeof(RT_Light) * 1024);
 
+		// Reset door state tracking
+		memset(g_prev_door_passable, 0, sizeof(g_prev_door_passable));
+		g_door_tracking_initialized = false;
+
 		return true;
 	}
 
@@ -342,8 +397,16 @@ bool RT_LoadLevel()
 	return false;
 }
 
-void RT_RenderLevel(RT_Vec3 player_pos) 
+void RT_RenderLevel(RT_Vec3 player_pos)
 {
+	// Rebuild level mesh if any door changed open/close state
+	if (RT_DoorStatesChanged())
+	{
+		RT_LOGF(RT_LOGSERVERITY_INFO, "Door state changed, rebuilding level mesh");
+		RT_ReleaseMesh(g_level_resource);
+		g_level_resource = RT_UploadLevelGeometry();
+	}
+
 	// ------------------------------------------------------------------
 	RT_UpdateMaterialEdges();
 	RT_UpdateMaterialIndices();

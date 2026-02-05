@@ -1088,7 +1088,11 @@ namespace RenderBackend
 
 	void ReleaseMesh(const RT_ResourceHandle mesh_handle)
 	{
-		MTL_STUB("ReleaseMesh");
+		if (RT_RESOURCE_HANDLE_VALID(mesh_handle))
+		{
+			MTL_LOG("ReleaseMesh: releasing handle %llu", (unsigned long long)mesh_handle.value);
+			g_mesh_slotmap.Remove(mesh_handle);
+		}
 	}
 
 	uint16_t UpdateMaterial(uint16_t material_index, const RT_Material *material)
