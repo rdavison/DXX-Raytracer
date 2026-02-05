@@ -1040,12 +1040,8 @@ namespace RenderBackend
 		TextureResource* stored = g_texture_slotmap.Find(handle);
 		if (stored) stored->handle = handle;
 
-		// Update argument buffer so this texture is available at its natural index
-		if (g_mtl.use_argument_buffers && g_mtl.raytrace_arg_encoder && g_mtl.raytrace_argument_buffer
-			&& handle.index > 0 && handle.index < RT_MAX_TEXTURES) {
-			[g_mtl.raytrace_arg_encoder setArgumentBuffer:g_mtl.raytrace_argument_buffer offset:0];
-			[g_mtl.raytrace_arg_encoder setTexture:texture atIndex:handle.index];
-		}
+		// Argument buffer is rebuilt every frame in RaytraceRender() after semaphore wait,
+		// so we don't need to update it here. The texture is already in the slotmap.
 
 		return handle;
 	}
@@ -1138,13 +1134,8 @@ namespace RenderBackend
 	{
 		if (RT_RESOURCE_HANDLE_VALID(texture_handle))
 		{
-			// Clear the argument buffer slot to fallback white texture
-			if (g_mtl.use_argument_buffers && g_mtl.raytrace_arg_encoder && g_mtl.raytrace_argument_buffer
-				&& texture_handle.index > 0 && texture_handle.index < RT_MAX_TEXTURES) {
-				[g_mtl.raytrace_arg_encoder setArgumentBuffer:g_mtl.raytrace_argument_buffer offset:0];
-				[g_mtl.raytrace_arg_encoder setTexture:g_mtl.raster_white_texture atIndex:texture_handle.index];
-			}
-			g_texture_slotmap.Remove(texture_handle);
+			// Defer release until after GPU finishes using the texture
+			g_mtl.pending_texture_releases.push_back(texture_handle);
 		}
 	}
 
@@ -1152,8 +1143,9 @@ namespace RenderBackend
 	{
 		if (RT_RESOURCE_HANDLE_VALID(mesh_handle))
 		{
-			MTL_LOG("ReleaseMesh: releasing handle %llu", (unsigned long long)mesh_handle.value);
-			g_mesh_slotmap.Remove(mesh_handle);
+			MTL_LOG("ReleaseMesh: deferring release of handle %llu", (unsigned long long)mesh_handle.value);
+			// Defer release until after GPU finishes using the BLAS
+			g_mtl.pending_mesh_releases.push_back(mesh_handle);
 			g_mtl.texture_remap_dirty = true;  // Mesh removed, remap may change
 		}
 	}
@@ -1438,6 +1430,47 @@ namespace RenderBackend
 		}
 	}
 
+	// Process deferred resource releases. Call this after compute_semaphore wait
+	// to ensure GPU has finished using the resources before we free them.
+	static void processDeferredReleases()
+	{
+		// Release deferred textures
+		for (const auto& handle : g_mtl.pending_texture_releases) {
+			g_texture_slotmap.Remove(handle);
+		}
+		g_mtl.pending_texture_releases.clear();
+
+		// Release deferred meshes (including their BLAS)
+		for (const auto& handle : g_mtl.pending_mesh_releases) {
+			MTL_LOG("ReleaseMesh: actually releasing handle %llu", (unsigned long long)handle.value);
+			g_mesh_slotmap.Remove(handle);
+		}
+		g_mtl.pending_mesh_releases.clear();
+	}
+
+	// Rebuild argument buffer from slotmap. Call this after compute_semaphore wait
+	// to ensure GPU has finished reading the argument buffer from the previous frame.
+	// This is called every frame to ensure textures are always up-to-date.
+	static void rebuildArgumentBuffer()
+	{
+		if (!g_mtl.use_argument_buffers || !g_mtl.raytrace_arg_encoder || !g_mtl.raytrace_argument_buffer)
+			return;
+
+		[g_mtl.raytrace_arg_encoder setArgumentBuffer:g_mtl.raytrace_argument_buffer offset:0];
+
+		// First, set all slots to white fallback texture
+		for (uint32_t i = 0; i < RT_MAX_TEXTURES; i++) {
+			[g_mtl.raytrace_arg_encoder setTexture:g_mtl.raster_white_texture atIndex:i];
+		}
+
+		// Then populate with actual textures from slotmap
+		g_texture_slotmap.ForEach([](const TextureResource& tex_res) {
+			if (tex_res.texture && tex_res.handle.index > 0 && tex_res.handle.index < RT_MAX_TEXTURES) {
+				[g_mtl.raytrace_arg_encoder setTexture:tex_res.texture atIndex:tex_res.handle.index];
+			}
+		});
+	}
+
 	// Scan triangles and build the per-frame texture remap table + bound texture array.
 	// Returns the number of texture slots used (including reserved slot 0).
 	static constexpr uint32_t MAX_BOUND_TEXTURES = 31;
@@ -1686,19 +1719,20 @@ namespace RenderBackend
 		[enc dispatchThreadgroups:groups threadsPerThreadgroup:tpg];
 		[enc endEncoding];
 
-		// Async dispatch: signal semaphore when GPU finishes.
-		// The wait happens at the start of RaytraceRender() to ensure
-		// the previous frame's compute is done before we write shared buffers.
-		__block dispatch_semaphore_t block_compute_sem = g_mtl.compute_semaphore;
-		[cmd addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
-			if (buffer.status != MTLCommandBufferStatusCompleted) {
-				MetalFileLog("[Metal] RaytraceRender: command buffer status=%ld error=%s",
-					(long)buffer.status,
-					buffer.error ? buffer.error.localizedDescription.UTF8String : "none");
-			}
-			dispatch_semaphore_signal(block_compute_sem);
-		}];
+		// Commit and wait for compute to finish before returning.
+		// This ensures the output texture is ready for the blit pass that follows.
+		// TODO: For better async performance, double-buffer the output texture.
 		[cmd commit];
+		[cmd waitUntilCompleted];
+
+		if (cmd.status != MTLCommandBufferStatusCompleted) {
+			MetalFileLog("[Metal] RaytraceRender: command buffer status=%ld error=%s",
+				(long)cmd.status,
+				cmd.error ? cmd.error.localizedDescription.UTF8String : "none");
+		}
+
+		// Signal semaphore so the wait at start of next frame doesn't block forever
+		dispatch_semaphore_signal(g_mtl.compute_semaphore);
 	}
 
 	// Log render stats. Note: with async dispatch, stats buffer contains
@@ -1756,6 +1790,12 @@ namespace RenderBackend
 			// Wait for previous frame's compute to finish before writing shared buffers.
 			// This prevents race conditions on scene_buffer, material_buffer, etc.
 			dispatch_semaphore_wait(g_mtl.compute_semaphore, DISPATCH_TIME_FOREVER);
+
+			// Process deferred resource releases now that GPU is done using them
+			processDeferredReleases();
+
+			// Rebuild argument buffer from slotmap now that GPU is done reading
+			rebuildArgumentBuffer();
 
 			ensureOutputTexture(w, h);
 

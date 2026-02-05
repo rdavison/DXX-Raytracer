@@ -274,6 +274,10 @@ namespace RT
 #endif
 		bool texture_remap_dirty;       // Rescan triangles for texture remap only when mesh changes
 
+		// Deferred resource deletion (freed after GPU finishes using them)
+		std::vector<RT_ResourceHandle> pending_mesh_releases;
+		std::vector<RT_ResourceHandle> pending_texture_releases;
+
 		// Mesh tracking
 		MeshTracker mesh_tracker;
 	};
