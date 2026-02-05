@@ -31,13 +31,13 @@ RT_ResourceHandle g_level_resource = { 0 };
 int g_active_level = 0;
 
 int m_light_count = 0;
-RT_Light m_lights[1024] = {0};
-int m_lights_definitions[1024] = {0};
-side* m_extracted_light_sides[1024] = {0};
+RT_Light m_lights[4096] = {0};
+int m_lights_definitions[4096] = {0};
+side* m_extracted_light_sides[4096] = {0};
 
-short m_lights_seg_ids[1024] = {-1};
-short m_lights_relevance_score[1024] = { 0.0f };
-short m_lights_to_sort[1024];
+short m_lights_seg_ids[4096] = {-1};
+short m_lights_relevance_score[4096] = { 0.0f };
+short m_lights_to_sort[4096];
 int m_lights_found = 0;
 
 // Door state tracking for mesh rebuild on open/close
@@ -146,8 +146,16 @@ void RT_ExtractLightsFromSide(side* side, RT_Vertex* vertices, RT_Vec3 normal, i
 			RT_Vec2 uv = RT_Vec2Sub(uv_max, uv_min);
 			RT_Vec2 light_size = g_light_definitions[light_index].size;
 
-			int num_x = max((int)(uv.x / light_size.x),1);
-			int num_y = max((int)(uv.y / light_size.y),1);
+			// Safe division: use 1.0 if size is zero or very small
+			float safe_size_x = (light_size.x > 0.01f) ? light_size.x : 1.0f;
+			float safe_size_y = (light_size.y > 0.01f) ? light_size.y : 1.0f;
+
+			int num_x = max((int)(uv.x / safe_size_x), 1);
+			int num_y = max((int)(uv.y / safe_size_y), 1);
+
+			// Clamp to reasonable maximum
+			num_x = min(num_x, 10);
+			num_y = min(num_y, 10);
 
 			RT_LOGF(RT_LOGSERVERITY_INFO, "Creating lights in the following directions. {X: %i, Y: %i}", num_x, num_y);
 			if(num_x > 1 && num_y > 1)
@@ -157,7 +165,7 @@ void RT_ExtractLightsFromSide(side* side, RT_Vertex* vertices, RT_Vec3 normal, i
 			}
 		}
 
-		if (!multiple_lights) 
+		if (!multiple_lights)
 		{
 			if (ALWAYS(m_light_count < RT_ARRAY_COUNT(m_lights)))
 			{
@@ -189,7 +197,8 @@ RT_ResourceHandle RT_UploadLevelGeometry()
 		RT_Vertex* verts = RT_ArenaAllocArray(&g_thread_arena, Num_segments * 6 * 4, RT_Vertex);
 		RT_Triangle* triangles = RT_ArenaAllocArray(&g_thread_arena, Num_segments * 6 * 2, RT_Triangle);
 
-		// Init lights segment id list
+		// Reset light count and init segment id list
+		m_light_count = 0;
 		for (size_t i = 0; i < _countof(m_lights_seg_ids); ++i) {
 			m_lights_seg_ids[i] = -1;
 		}
@@ -385,7 +394,7 @@ bool RT_UnloadLevel()
 		g_level_resource = RT_RESOURCE_HANDLE_NULL;
 
 		m_light_count = 0;
-		memset(m_lights, 0, sizeof(RT_Light) * 1024);
+		memset(m_lights, 0, sizeof(m_lights));
 
 		// Reset door state tracking
 		memset(g_prev_door_passable, 0, sizeof(g_prev_door_passable));
