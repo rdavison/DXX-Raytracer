@@ -104,6 +104,23 @@ namespace RT
             return result;
         }
 
+        // Iterate through all occupied slots
+        template <typename Func>
+        void ForEach(Func&& func) const
+        {
+            for (size_t i = 1; i < m_capacity; i++)
+            {
+                Slot *slot = &m_slots[i];
+                if (slot->next_free == OCCUPIED)
+                {
+                    func(slot->resource);
+                }
+            }
+        }
+
+        // Get the capacity of the slotmap
+        size_t Capacity() const { return m_capacity; }
+
     private:
         RT_ResourceHandle AllocateSlot()
         {

@@ -56,8 +56,25 @@ namespace RT
 		uint32_t triangle_buffer_idx;  // Index into mesh slotmap
 		uint32_t triangle_count;
 		uint32_t color;
-		uint32_t _pad;
+		uint32_t material_override;    // Material index override (0 = use triangle's material)
 	};
+
+	// GPU-compatible material data (matches DX12 Material struct)
+	struct GPUMaterial
+	{
+		uint32_t albedo_index;
+		uint32_t normal_index;
+		uint32_t metalness_index;
+		uint32_t roughness_index;
+		uint32_t emissive_index;
+		uint32_t height_index;
+		uint32_t flags;
+		float    metalness_factor;
+		float    roughness_factor;
+		uint32_t emissive_factor;
+		uint32_t _pad[2];  // Pad to 48 bytes for alignment
+	};
+	static_assert(sizeof(GPUMaterial) == 48, "GPUMaterial size mismatch");
 
 	// Scene constants for compute shader
 	struct RaytraceSceneConstants
@@ -74,12 +91,14 @@ namespace RT
 		uint32_t total_triangles;
 		float _pad4[2];
 		uint32_t debug_mode;
-		uint32_t _pad5[3];
+		uint32_t texture_count;
+		uint32_t _pad5[2];
 	};
 	static_assert(sizeof(RaytraceSceneConstants) == 112, "RaytraceSceneConstants size mismatch");
 	static_assert(offsetof(RaytraceSceneConstants, render_width) == 72, "RaytraceSceneConstants render_width offset mismatch");
 	static_assert(offsetof(RaytraceSceneConstants, instance_count) == 80, "RaytraceSceneConstants instance_count offset mismatch");
 	static_assert(offsetof(RaytraceSceneConstants, debug_mode) == 96, "RaytraceSceneConstants debug_mode offset mismatch");
+	static_assert(offsetof(RaytraceSceneConstants, texture_count) == 100, "RaytraceSceneConstants texture_count offset mismatch");
 
 	struct TextureResource
 	{
@@ -196,15 +215,27 @@ namespace RT
 	id<MTLBuffer> raytrace_scene_buffer;
 	id<MTLBuffer> raytrace_stats_buffer;
 	id<MTLTexture> raytrace_output_texture;
+	// Material system buffers
+	id<MTLBuffer> raytrace_material_buffer;        // GPUMaterial array
+	id<MTLBuffer> raytrace_material_edges_buffer;  // RT_MaterialEdge array
+	id<MTLBuffer> raytrace_material_indices_buffer; // uint16_t array
+	id<MTLBuffer> raytrace_texture_remap_buffer;   // Texture index remapping table
+	id<MTLSamplerState> raytrace_sampler;          // Texture sampler
 #else
 	id raytrace_pipeline;
 	id raytrace_instance_buffer;
 	id raytrace_scene_buffer;
 	id raytrace_stats_buffer;
 	id raytrace_output_texture;
+	id raytrace_material_buffer;
+	id raytrace_material_edges_buffer;
+	id raytrace_material_indices_buffer;
+	id raytrace_texture_remap_buffer;
+	id raytrace_sampler;
 #endif
 		uint32_t raytrace_instance_count;
 		std::vector<RT_ResourceHandle> raytrace_pending_meshes;
+		bool raytrace_materials_dirty;  // Flag to rebuild material buffer
 
 		// Mesh tracking
 		MeshTracker mesh_tracker;

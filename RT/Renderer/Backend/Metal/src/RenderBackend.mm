@@ -236,6 +236,11 @@ static const char* kRaytraceShader = R"metal(
 #include <metal_stdlib>
 using namespace metal;
 
+// Constants matching Renderer.h
+#define RT_TRIANGLE_HOLDS_MATERIAL_EDGE  (1u << 31)
+#define RT_TRIANGLE_HOLDS_MATERIAL_INDEX (1u << 30)
+#define RT_MAX_TEXTURES 6030
+
 struct Triangle {
     packed_float3 pos0;
     packed_float3 pos1;
@@ -244,7 +249,6 @@ struct Triangle {
     packed_float3 normal1;
     packed_float3 normal2;
     // Use float arrays instead of float4 to avoid 16-byte alignment padding
-    // that would break CPU/GPU struct layout compatibility
     float tangent0[4];
     float tangent1[4];
     float tangent2[4];
@@ -261,7 +265,7 @@ struct Instance {
     uint triangle_buffer_idx;
     uint triangle_count;
     uint color;
-    uint _pad;
+    uint material_override;
 };
 
 struct SceneConstants {
@@ -277,8 +281,27 @@ struct SceneConstants {
     uint total_triangles;
     float _pad4[2];
     uint debug_mode;
-    uint _pad5[3];
+    uint texture_count;
+    uint _pad5[2];
 };
+
+// GPU Material struct (matches GPUMaterial in C++)
+struct Material {
+    uint albedo_index;
+    uint normal_index;
+    uint metalness_index;
+    uint roughness_index;
+    uint emissive_index;
+    uint height_index;
+    uint flags;
+    float metalness_factor;
+    float roughness_factor;
+    uint emissive_factor;
+    uint _pad[2];
+};
+
+// MaterialEdge packed as uint (mat1 in low 16 bits, mat2 in high 16 bits)
+// Orientation is in bits 30-31 of mat2
 
 bool ray_tri_intersect(float3 ro, float3 rd, float3 v0, float3 v1, float3 v2,
                        thread float& t, thread float& u, thread float& v) {
@@ -297,17 +320,64 @@ bool ray_tri_intersect(float3 ro, float3 rd, float3 v0, float3 v1, float3 v2,
     return t > 0.001;
 }
 
+// Get material index from material_indices array (packed uint16s)
+uint get_material_index(constant uint* material_indices, uint material_edge) {
+    uint word_idx = material_edge >> 1;
+    uint word = material_indices[word_idx];
+    if (material_edge & 1) {
+        return (word >> 16) & 0xFFFF;
+    } else {
+        return word & 0xFFFF;
+    }
+}
+
+// Decode material_edge_index to get material index
+uint resolve_material_index(uint material_edge_index, uint material_override,
+                            constant uint* material_edges,
+                            constant uint* material_indices) {
+    if (material_override != 0) {
+        return material_override;
+    }
+
+    if (material_edge_index & RT_TRIANGLE_HOLDS_MATERIAL_INDEX) {
+        return material_edge_index & ~RT_TRIANGLE_HOLDS_MATERIAL_INDEX;
+    }
+
+    if (material_edge_index & RT_TRIANGLE_HOLDS_MATERIAL_EDGE) {
+        uint edge_idx = material_edge_index & ~RT_TRIANGLE_HOLDS_MATERIAL_EDGE;
+        return get_material_index(material_indices, edge_idx);
+    }
+
+    // Normal case: look up in material_edges, then material_indices
+    uint edge = material_edges[material_edge_index];
+    uint mat1 = edge & 0xFFFF;
+    return get_material_index(material_indices, mat1);
+}
+
+// Interpolate UV coordinates from barycentric
+float2 interpolate_uv(float2 uv0, float2 uv1, float2 uv2, float u, float v) {
+    float w = 1.0 - u - v;
+    return uv0 * w + uv1 * u + uv2 * v;
+}
+
+// Use 31 textures max (Metal compute shader limit without argument buffers)
+#define MAX_BOUND_TEXTURES 31
+
 kernel void raytrace_main(
     texture2d<float, access::write> output [[texture(0)]],
+    array<texture2d<float>, MAX_BOUND_TEXTURES> textures [[texture(1)]],
+    sampler tex_sampler [[sampler(0)]],
     constant SceneConstants& scene [[buffer(0)]],
     constant Instance* instances [[buffer(1)]],
     constant Triangle* triangles [[buffer(2)]],
     device atomic_uint* hit_counter [[buffer(3)]],
+    constant Material* materials [[buffer(4)]],
+    constant uint* material_edges [[buffer(5)]],
+    constant uint* material_indices [[buffer(6)]],
+    constant uint* texture_remap [[buffer(7)]],
     uint2 gid [[thread_position_in_grid]])
 {
     if (gid.x >= scene.render_width || gid.y >= scene.render_height) return;
-
-    // debug_mode==2 was used for camera buffer validation; fall through for normal tracing.
 
     float2 ndc = float2(
         (float(gid.x) + 0.5) / float(scene.render_width) * 2.0 - 1.0,
@@ -316,7 +386,6 @@ kernel void raytrace_main(
 
     float half_h = tan(scene.vfov_radians * 0.5);
     if (half_h < 0.0001f) {
-        // Fallback to a 90-degree vertical FOV when the game hasn't set one yet.
         half_h = 1.0f;
     }
     float3 rd = normalize(scene.camera_forward +
@@ -327,28 +396,17 @@ kernel void raytrace_main(
     float closest_t = 1e30;
     float3 hit_normal = float3(0);
     float4 hit_color = float4(0);
-
-    if (scene.debug_mode != 0) {
-        float3 v0 = scene.camera_position + (scene.camera_forward) * 5.0 + scene.camera_right * -1.0 + scene.camera_up * -1.0;
-        float3 v1 = scene.camera_position + (scene.camera_forward) * 5.0 + scene.camera_right *  1.0 + scene.camera_up * -1.0;
-        float3 v2 = scene.camera_position + (scene.camera_forward) * 5.0 + scene.camera_right *  0.0 + scene.camera_up *  1.0;
-        float t, u, v;
-        if (ray_tri_intersect(ro, rd, v0, v1, v2, t, u, v)) {
-            closest_t = t;
-            hit_normal = normalize(cross(v1 - v0, v2 - v0));
-            hit_color = float4(1, 0, 1, 1);
-        }
-    }
+    float2 hit_uv = float2(0);
+    uint hit_material_index = 0;
+    uint hit_instance_material_override = 0;
 
     uint tri_offset = 0;
     for (uint i = 0; i < scene.instance_count; i++) {
         constant Instance& inst = instances[i];
 
-        // C++ uses row-major matrices, Metal expects column-major, so transpose
         float4x4 w2o = transpose(inst.world_to_object);
         float4x4 o2w = transpose(inst.object_to_world);
 
-        // Transform ray to object space
         float3 obj_ro = (w2o * float4(ro, 1.0)).xyz;
         float3 obj_rd = normalize((w2o * float4(rd, 0.0)).xyz);
 
@@ -359,7 +417,6 @@ kernel void raytrace_main(
             float3 p1 = float3(tri.pos1);
             float3 p2 = float3(tri.pos2);
             if (ray_tri_intersect(obj_ro, obj_rd, p0, p1, p2, t, u, v)) {
-                // t is in object space - convert to world space distance
                 float3 obj_hit = obj_ro + obj_rd * t;
                 float3 world_hit = (o2w * float4(obj_hit, 1.0)).xyz;
                 float world_t = length(world_hit - ro);
@@ -367,16 +424,22 @@ kernel void raytrace_main(
                 if (world_t < closest_t) {
                     closest_t = world_t;
                     float w_bary = 1.0 - u - v;
+
+                    // Interpolate normal
                     float3 n0 = float3(tri.normal0);
                     float3 n1 = float3(tri.normal1);
                     float3 n2 = float3(tri.normal2);
                     float3 obj_normal = normalize(n0*w_bary + n1*u + n2*v);
-
-                    // Transform normal to world space (use transpose of inverse = transpose of w2o)
-                    // Since w2o = transpose(world_to_object), we need transpose(w2o) = world_to_object
-                    // For normals: n_world = normalize((inverse(o2w)^T) * n) = normalize(w2o^T * n)
                     hit_normal = normalize((inst.world_to_object * float4(obj_normal, 0.0)).xyz);
 
+                    // Interpolate UV
+                    hit_uv = interpolate_uv(float2(tri.uv0), float2(tri.uv1), float2(tri.uv2), u, v);
+
+                    // Store material info for later lookup
+                    hit_material_index = tri.material_edge_index;
+                    hit_instance_material_override = inst.material_override;
+
+                    // Fallback color from vertex/instance
                     uint c = tri.color ? tri.color : inst.color;
                     hit_color = float4(float(c&0xFF)/255.0, float((c>>8)&0xFF)/255.0,
                                        float((c>>16)&0xFF)/255.0, 1.0);
@@ -389,8 +452,44 @@ kernel void raytrace_main(
     float4 color;
     if (closest_t < 1e29) {
         atomic_fetch_add_explicit(hit_counter, 1, memory_order_relaxed);
+
+        // Resolve material and sample texture
+        uint mat_idx = resolve_material_index(hit_material_index, hit_instance_material_override,
+                                              material_edges, material_indices);
+
+        // Clamp material index to valid range
+        mat_idx = min(mat_idx, (uint)(RT_MAX_TEXTURES - 1));
+
+        // Get material and sample albedo texture
+        constant Material& mat = materials[mat_idx];
+        uint tex_idx = mat.albedo_index;
+
+        // Sample texture if valid index and textures are bound
+        float4 albedo = hit_color;
+
+        // DEBUG: Visualize UVs as colors to verify UV interpolation
+        // Comment this out once textures are working
+        if (scene.debug_mode == 1) {
+            albedo = float4(fract(hit_uv.x), fract(hit_uv.y), 0.5, 1.0);
+        }
+        // DEBUG: Visualize material index as color
+        else if (scene.debug_mode == 2) {
+            float hue = fract(float(mat_idx) * 0.1);
+            albedo = float4(hue, 1.0 - hue, fract(hue * 3.0), 1.0);
+        }
+        else if (tex_idx > 0 && tex_idx < RT_MAX_TEXTURES) {
+            // Look up remapped slot from texture_remap table
+            uint slot = texture_remap[tex_idx];
+            if (slot > 0 && slot < MAX_BOUND_TEXTURES) {
+                albedo = textures[slot].sample(tex_sampler, hit_uv);
+                // Premultiply with vertex color for tinting
+                albedo.rgb *= hit_color.rgb;
+            }
+        }
+
+        // Simple lighting
         float ndotl = max(0.0f, dot(hit_normal, normalize(float3(0.5,1,0.3))));
-        color = float4(hit_color.rgb * (0.2 + 0.8*ndotl), 1);
+        color = float4(albedo.rgb * (0.2 + 0.8*ndotl), 1);
     } else {
         float sky_t = rd.y * 0.5 + 0.5;
         color = float4(mix(float3(0.1,0.1,0.2), float3(0.5,0.7,1.0), sky_t), 1);
@@ -567,6 +666,7 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
 
 RT_MaterialEdge g_rt_material_edges[RT_MAX_MATERIAL_EDGES];
 uint16_t        g_rt_material_indices[RT_MAX_MATERIALS];
+RT_Material     g_rt_materials[RT_MAX_TEXTURES];
 
 namespace RT
 {
@@ -705,9 +805,31 @@ namespace RenderBackend
 			g_mtl.raytrace_stats_buffer = [g_mtl.device newBufferWithLength:
 				sizeof(uint32_t) options:MTLResourceStorageModeShared];
 			g_mtl.raytrace_instance_count = 0;
-			MetalFileLog("[Metal] Init: raytrace buffers instances=%s scene=%s",
+
+			// Material system buffers
+			g_mtl.raytrace_material_buffer = [g_mtl.device newBufferWithLength:
+				sizeof(GPUMaterial) * RT_MAX_MATERIALS options:MTLResourceStorageModeShared];
+			g_mtl.raytrace_material_edges_buffer = [g_mtl.device newBufferWithLength:
+				sizeof(RT_MaterialEdge) * RT_MAX_MATERIAL_EDGES options:MTLResourceStorageModeShared];
+			g_mtl.raytrace_material_indices_buffer = [g_mtl.device newBufferWithLength:
+				sizeof(uint16_t) * RT_MAX_MATERIALS options:MTLResourceStorageModeShared];
+			// Texture remap buffer: maps original texture indices to bounded shader slots (0-30)
+			g_mtl.raytrace_texture_remap_buffer = [g_mtl.device newBufferWithLength:
+				sizeof(uint32_t) * RT_MAX_TEXTURES options:MTLResourceStorageModeShared];
+			g_mtl.raytrace_materials_dirty = true;
+
+			// Create texture sampler for raytracing
+			MTLSamplerDescriptor* sampler_desc = [[MTLSamplerDescriptor alloc] init];
+			sampler_desc.minFilter = MTLSamplerMinMagFilterLinear;
+			sampler_desc.magFilter = MTLSamplerMinMagFilterLinear;
+			sampler_desc.sAddressMode = MTLSamplerAddressModeRepeat;
+			sampler_desc.tAddressMode = MTLSamplerAddressModeRepeat;
+			g_mtl.raytrace_sampler = [g_mtl.device newSamplerStateWithDescriptor:sampler_desc];
+
+			MetalFileLog("[Metal] Init: raytrace buffers instances=%s scene=%s materials=%s",
 				g_mtl.raytrace_instance_buffer ? "yes" : "no",
-				g_mtl.raytrace_scene_buffer ? "yes" : "no");
+				g_mtl.raytrace_scene_buffer ? "yes" : "no",
+				g_mtl.raytrace_material_buffer ? "yes" : "no");
 		}
 
 		g_mtl.io.config = RT_ArenaAllocStructNoZero(g_mtl.arena, RT_Config);
@@ -1117,6 +1239,9 @@ namespace RenderBackend
 		TextureResource res = {};
 		res.texture = texture;
 		RT_ResourceHandle handle = g_texture_slotmap.Insert(res);
+		// Store handle back into the resource so ForEach can access it
+		TextureResource* stored = g_texture_slotmap.Find(handle);
+		if (stored) stored->handle = handle;
 		return handle;
 	}
 
@@ -1155,7 +1280,11 @@ namespace RenderBackend
 
 	uint16_t UpdateMaterial(uint16_t material_index, const RT_Material *material)
 	{
-		MTL_STUB("UpdateMaterial");
+		if (material_index < RT_MAX_MATERIALS && material)
+		{
+			g_rt_materials[material_index] = *material;
+			g_mtl.raytrace_materials_dirty = true;
+		}
 		return material_index;
 	}
 
@@ -1184,6 +1313,7 @@ namespace RenderBackend
 		inst.triangle_buffer_idx = params.mesh_handle.index;
 		inst.triangle_count = mesh->triangle_count;
 		inst.color = params.color ? params.color : 0xFFFFFFFF;
+		inst.material_override = params.material_override;
 
 		g_mtl.raytrace_pending_meshes.push_back(params.mesh_handle);
 		g_mtl.raytrace_instance_count++;
@@ -1267,6 +1397,127 @@ namespace RenderBackend
 				}
 			}
 
+			// Copy material data to GPU buffers
+			memcpy([g_mtl.raytrace_material_edges_buffer contents], g_rt_material_edges,
+				   sizeof(RT_MaterialEdge) * RT_MAX_MATERIAL_EDGES);
+			memcpy([g_mtl.raytrace_material_indices_buffer contents], g_rt_material_indices,
+				   sizeof(uint16_t) * RT_MAX_MATERIALS);
+
+			// Build GPU material array from g_rt_materials
+			GPUMaterial* gpu_materials = (GPUMaterial*)[g_mtl.raytrace_material_buffer contents];
+			for (uint32_t i = 0; i < RT_MAX_MATERIALS; i++) {
+				const RT_Material& src = g_rt_materials[i];
+				GPUMaterial& dst = gpu_materials[i];
+				dst.albedo_index = src.albedo_texture.index;
+				dst.normal_index = src.normal_texture.index;
+				dst.metalness_index = src.metalness_texture.index;
+				dst.roughness_index = src.roughness_texture.index;
+				dst.emissive_index = src.emissive_texture.index;
+				dst.height_index = src.height_texture.index;
+				dst.flags = src.flags;
+				dst.metalness_factor = src.metalness;
+				dst.roughness_factor = src.roughness;
+				dst.emissive_factor = (uint32_t)(src.emissive_strength * 255.0f);
+			}
+
+			// ============================================================
+			// Dynamic Texture Remapping: Build per-frame texture mapping
+			// ============================================================
+			// Step 1: Collect unique texture indices used by triangles this frame
+			constexpr uint32_t MAX_BOUND_TEXTURES = 31;
+			std::vector<uint32_t> used_texture_indices;
+			used_texture_indices.reserve(MAX_BOUND_TEXTURES);
+
+			// Helper lambda to get material index from material_indices (same logic as shader)
+			auto get_material_index = [](uint32_t material_edge) -> uint32_t {
+				// g_rt_material_indices is uint16_t[], so direct index access works
+				return g_rt_material_indices[material_edge];
+			};
+
+			// Scan triangles to find material_edge_index values and resolve to materials
+			for (uint32_t tri_idx = 0; tri_idx < total_tris; tri_idx++) {
+				uint32_t mat_edge_idx = dst[tri_idx].material_edge_index;
+				uint32_t mat_idx = 0;
+
+				// Resolve material index using the same logic as shader
+				if (mat_edge_idx & RT_TRIANGLE_HOLDS_MATERIAL_INDEX) {
+					mat_idx = mat_edge_idx & ~RT_TRIANGLE_HOLDS_MATERIAL_INDEX;
+				} else if (mat_edge_idx & RT_TRIANGLE_HOLDS_MATERIAL_EDGE) {
+					uint32_t edge_idx = mat_edge_idx & ~RT_TRIANGLE_HOLDS_MATERIAL_EDGE;
+					mat_idx = get_material_index(edge_idx);
+				} else {
+					// Normal case: look up in material_edges, then material_indices
+					if (mat_edge_idx < RT_MAX_MATERIAL_EDGES) {
+						RT_MaterialEdge edge = g_rt_material_edges[mat_edge_idx];
+						uint16_t mat1 = edge.mat1;
+						mat_idx = get_material_index(mat1);
+					}
+				}
+
+				// Clamp material index and get albedo texture index
+				if (mat_idx < RT_MAX_MATERIALS) {
+					uint32_t tex_idx = g_rt_materials[mat_idx].albedo_texture.index;
+					if (tex_idx > 0 && tex_idx < RT_MAX_TEXTURES) {
+						// Check if already in our list
+						bool found = false;
+						for (uint32_t k = 0; k < used_texture_indices.size(); k++) {
+							if (used_texture_indices[k] == tex_idx) {
+								found = true;
+								break;
+							}
+						}
+						if (!found && used_texture_indices.size() < MAX_BOUND_TEXTURES - 1) {
+							used_texture_indices.push_back(tex_idx);
+						}
+					}
+				}
+			}
+
+			// Step 2: Build remap table
+			// texture_remap[original_index] = remapped_slot (1-30), 0 = not mapped
+			uint32_t* texture_remap = (uint32_t*)[g_mtl.raytrace_texture_remap_buffer contents];
+			memset(texture_remap, 0, sizeof(uint32_t) * RT_MAX_TEXTURES);
+
+			// Step 3: Build texture array and assign slots
+			id<MTLTexture> texture_array[MAX_BOUND_TEXTURES];
+			for (uint32_t i = 0; i < MAX_BOUND_TEXTURES; i++) {
+				texture_array[i] = g_mtl.raster_white_texture; // Default to white
+			}
+
+			uint32_t next_slot = 1; // Start at slot 1 (slot 0 reserved for fallback white)
+			for (uint32_t i = 0; i < used_texture_indices.size() && next_slot < MAX_BOUND_TEXTURES; i++) {
+				uint32_t tex_idx = used_texture_indices[i];
+
+				// Find the texture in slotmap by matching handle.index
+				id<MTLTexture> found_tex = nil;
+
+				g_texture_slotmap.ForEach([&](const TextureResource& tex_res) {
+					if (tex_res.handle.index == tex_idx && tex_res.texture) {
+						found_tex = tex_res.texture;
+					}
+				});
+
+				if (found_tex) {
+					texture_array[next_slot] = found_tex;
+					texture_remap[tex_idx] = next_slot;
+					next_slot++;
+				}
+			}
+
+			uint32_t texture_count = next_slot;
+
+			// Log texture remapping info
+			static bool logged_remap = false;
+			if (!logged_remap && used_texture_indices.size() > 0) {
+				MetalFileLog("[Metal] Texture remap: %zu unique textures used, %u slots assigned",
+					used_texture_indices.size(), texture_count - 1);
+				for (uint32_t i = 0; i < used_texture_indices.size() && i < 10; i++) {
+					uint32_t tex_idx = used_texture_indices[i];
+					MetalFileLog("[Metal]   tex_idx %u -> slot %u", tex_idx, texture_remap[tex_idx]);
+				}
+				logged_remap = true;
+			}
+
 			// Fill scene constants
 			RaytraceSceneConstants* scene = (RaytraceSceneConstants*)[g_mtl.raytrace_scene_buffer contents];
 			scene->camera_position = g_mtl.scene.camera.position;
@@ -1281,16 +1532,16 @@ namespace RenderBackend
 			scene->render_height = h;
 			scene->instance_count = g_mtl.raytrace_instance_count;
 			scene->total_triangles = total_tris;
-			scene->debug_mode = 0;
+			scene->debug_mode = 0;  // 0=normal, 1=UVs, 2=material index
+			scene->texture_count = texture_count;
 			scene->_pad5[0] = 0;
 			scene->_pad5[1] = 0;
-			scene->_pad5[2] = 0;
-			MetalFileLog("[Metal] RaytraceRender: scene cam pos(%.2f %.2f %.2f) f(%.2f %.2f %.2f) r(%.2f %.2f %.2f) u(%.2f %.2f %.2f) vfov=%.2f debug=%u",
+			MetalFileLog("[Metal] RaytraceRender: scene cam pos(%.2f %.2f %.2f) f(%.2f %.2f %.2f) r(%.2f %.2f %.2f) u(%.2f %.2f %.2f) vfov=%.2f textures=%u",
 				scene->camera_position.x, scene->camera_position.y, scene->camera_position.z,
 				scene->camera_forward.x, scene->camera_forward.y, scene->camera_forward.z,
 				scene->camera_right.x, scene->camera_right.y, scene->camera_right.z,
 				scene->camera_up.x, scene->camera_up.y, scene->camera_up.z,
-				scene->vfov_radians, scene->debug_mode);
+				scene->vfov_radians, scene->texture_count);
 
 			if (g_mtl.raytrace_stats_buffer)
 			{
@@ -1303,10 +1554,19 @@ namespace RenderBackend
 			id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
 			[enc setComputePipelineState:g_mtl.raytrace_pipeline];
 			[enc setTexture:g_mtl.raytrace_output_texture atIndex:0];
+			// Bind texture array (textures 1-31)
+			for (uint32_t i = 0; i < MAX_BOUND_TEXTURES; i++) {
+				[enc setTexture:texture_array[i] atIndex:1 + i];
+			}
+			[enc setSamplerState:g_mtl.raytrace_sampler atIndex:0];
 			[enc setBuffer:g_mtl.raytrace_scene_buffer offset:0 atIndex:0];
 			[enc setBuffer:g_mtl.raytrace_instance_buffer offset:0 atIndex:1];
 			[enc setBuffer:combined offset:0 atIndex:2];
 			[enc setBuffer:g_mtl.raytrace_stats_buffer offset:0 atIndex:3];
+			[enc setBuffer:g_mtl.raytrace_material_buffer offset:0 atIndex:4];
+			[enc setBuffer:g_mtl.raytrace_material_edges_buffer offset:0 atIndex:5];
+			[enc setBuffer:g_mtl.raytrace_material_indices_buffer offset:0 atIndex:6];
+			[enc setBuffer:g_mtl.raytrace_texture_remap_buffer offset:0 atIndex:7];
 
 			MTLSize tpg = MTLSizeMake(8, 8, 1);
 			MTLSize groups = MTLSizeMake((w+7)/8, (h+7)/8, 1);

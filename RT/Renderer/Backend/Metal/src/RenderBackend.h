@@ -5,6 +5,7 @@
 
 extern RT_MaterialEdge g_rt_material_edges  [RT_MAX_MATERIAL_EDGES];
 extern uint16_t        g_rt_material_indices[RT_MAX_MATERIALS];
+extern RT_Material     g_rt_materials       [RT_MAX_TEXTURES];
 
 namespace RenderBackend
 {
