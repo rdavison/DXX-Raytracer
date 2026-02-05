@@ -260,6 +260,7 @@ kernel void raytrace_main(
                 uint edge = material_edges[mei];
                 uint mat2_tmap = (edge >> 16) & 0x3FFF;
                 if (mat2_tmap != 0) {
+                    // Has overlay (mat2): check overlay alpha (grates, overlay-animated doors)
                     uint mat2_idx = get_material_index(material_indices, mat2_tmap);
                     mat2_idx = min(mat2_idx, (uint)(RT_MAX_TEXTURES - 1));
                     constant Material& mat2 = materials[mat2_idx];
@@ -275,6 +276,22 @@ kernel void raytrace_main(
                             // alpha=1.0: opaque bar
                             if (overlay_alpha < 0.1) {
                                 skip_hit = true; // Grate hole — see through
+                            }
+                        }
+                    }
+                } else {
+                    // No overlay: check base texture alpha (tmap1-animated doors)
+                    uint mat1 = edge & 0xFFFF;
+                    uint mat1_idx = get_material_index(material_indices, mat1);
+                    mat1_idx = min(mat1_idx, (uint)(RT_MAX_TEXTURES - 1));
+                    constant Material& mat1_mat = materials[mat1_idx];
+                    uint tex1 = mat1_mat.albedo_index;
+                    if (tex1 > 0 && tex1 < RT_MAX_TEXTURES) {
+                        uint slot1 = texture_remap[tex1];
+                        if (slot1 > 0 && slot1 < MAX_BOUND_TEXTURES) {
+                            float base_alpha = textures[slot1].sample(tex_sampler, uv).a;
+                            if (base_alpha < 0.5) {
+                                skip_hit = true;
                             }
                         }
                     }
