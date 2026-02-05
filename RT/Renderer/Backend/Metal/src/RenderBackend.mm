@@ -1434,9 +1434,21 @@ namespace RenderBackend
 	// to ensure GPU has finished using the resources before we free them.
 	static void processDeferredReleases()
 	{
-		// Release deferred textures
-		for (const auto& handle : g_mtl.pending_texture_releases) {
-			g_texture_slotmap.Remove(handle);
+		bool had_texture_releases = !g_mtl.pending_texture_releases.empty();
+
+		// Release deferred textures and clear their argument buffer slots
+		if (had_texture_releases && g_mtl.use_argument_buffers && g_mtl.raytrace_arg_encoder) {
+			[g_mtl.raytrace_arg_encoder setArgumentBuffer:g_mtl.raytrace_argument_buffer offset:0];
+			for (const auto& handle : g_mtl.pending_texture_releases) {
+				if (handle.index > 0 && handle.index < RT_MAX_TEXTURES) {
+					[g_mtl.raytrace_arg_encoder setTexture:g_mtl.raster_white_texture atIndex:handle.index];
+				}
+				g_texture_slotmap.Remove(handle);
+			}
+		} else {
+			for (const auto& handle : g_mtl.pending_texture_releases) {
+				g_texture_slotmap.Remove(handle);
+			}
 		}
 		g_mtl.pending_texture_releases.clear();
 
@@ -1448,22 +1460,17 @@ namespace RenderBackend
 		g_mtl.pending_mesh_releases.clear();
 	}
 
-	// Rebuild argument buffer from slotmap. Call this after compute_semaphore wait
-	// to ensure GPU has finished reading the argument buffer from the previous frame.
-	// This is called every frame to ensure textures are always up-to-date.
-	static void rebuildArgumentBuffer()
+	// Update argument buffer for newly uploaded textures. Call after processDeferredReleases.
+	// Only updates slots that have new textures, not all 6030 slots.
+	static void updateArgumentBufferForNewTextures()
 	{
 		if (!g_mtl.use_argument_buffers || !g_mtl.raytrace_arg_encoder || !g_mtl.raytrace_argument_buffer)
 			return;
 
+		// The argument buffer was initialized to white at startup.
+		// Released textures have their slots reset to white in processDeferredReleases.
+		// Here we just need to set slots for currently active textures.
 		[g_mtl.raytrace_arg_encoder setArgumentBuffer:g_mtl.raytrace_argument_buffer offset:0];
-
-		// First, set all slots to white fallback texture
-		for (uint32_t i = 0; i < RT_MAX_TEXTURES; i++) {
-			[g_mtl.raytrace_arg_encoder setTexture:g_mtl.raster_white_texture atIndex:i];
-		}
-
-		// Then populate with actual textures from slotmap
 		g_texture_slotmap.ForEach([](const TextureResource& tex_res) {
 			if (tex_res.texture && tex_res.handle.index > 0 && tex_res.handle.index < RT_MAX_TEXTURES) {
 				[g_mtl.raytrace_arg_encoder setTexture:tex_res.texture atIndex:tex_res.handle.index];
@@ -1794,8 +1801,8 @@ namespace RenderBackend
 			// Process deferred resource releases now that GPU is done using them
 			processDeferredReleases();
 
-			// Rebuild argument buffer from slotmap now that GPU is done reading
-			rebuildArgumentBuffer();
+			// Update argument buffer for any new textures
+			updateArgumentBufferForNewTextures();
 
 			ensureOutputTexture(w, h);
 

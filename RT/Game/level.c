@@ -82,9 +82,8 @@ static bool RT_DoorStatesChanged(void)
 			g_prev_door_passable[i] = passable_now;
 		}
 
-		// Rebuild every frame during door animation so texture changes are picked up
-		if (w->state == WALL_DOOR_OPENING || w->state == WALL_DOOR_CLOSING)
-			changed = true;
+		// Note: Door texture changes during animation are handled by RT_UpdateMaterialEdges()
+		// which updates material edges every frame. No need to rebuild geometry for textures.
 	}
 
 	return changed;
@@ -292,9 +291,10 @@ RT_ResourceHandle RT_UploadLevelGeometry()
 					triangles[num_triangles - 2].material_edge_index |= RT_TRIANGLE_ALPHA_CUTOUT;
 				}
 
-				// Tag animating door triangles for alpha cutout so rays pass through opened portions
-				if (s->wall_num != -1 && Walls[s->wall_num].type == WALL_DOOR &&
-					(Walls[s->wall_num].state == WALL_DOOR_OPENING || Walls[s->wall_num].state == WALL_DOOR_CLOSING)) {
+				// Tag ALL door triangles for alpha cutout so rays can pass through during animation.
+				// When closed, door texture is opaque so alpha cutout has no effect.
+				// When animating, transparent parts of door texture allow rays through.
+				if (s->wall_num != -1 && Walls[s->wall_num].type == WALL_DOOR) {
 					triangles[num_triangles - 1].material_edge_index |= RT_TRIANGLE_ALPHA_CUTOUT;
 					triangles[num_triangles - 2].material_edge_index |= RT_TRIANGLE_ALPHA_CUTOUT;
 				}
