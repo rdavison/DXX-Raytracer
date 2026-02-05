@@ -47,7 +47,7 @@ static bool g_door_tracking_initialized = false;
 // Returns true if a door is passable (rays should pass through)
 static bool RT_IsDoorPassable(wall *w)
 {
-	return (w->flags & WALL_DOOR_OPENED) || (w->state == WALL_DOOR_OPENING);
+	return (w->flags & WALL_DOOR_OPENED);
 }
 
 // Returns true if any door's passable state changed since last call
