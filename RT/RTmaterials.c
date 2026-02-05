@@ -646,7 +646,57 @@ int RT_ReloadMaterials(void)
 	return textures_reloaded;
 }
 
-void RT_SyncMaterialStates(void) 
+// Load the original (low-res) bitmap as the albedo texture for a material.
+// Returns true if the texture was loaded, false if the bitmap is invalid.
+static bool RT_LoadOriginalBitmapAsAlbedo(uint16_t bm_index, RT_Material* material, const char* bitmap_name)
+{
+	bool loaded = false;
+	RT_ArenaMemoryScope(&g_thread_arena)
+	{
+		grs_bitmap* bitmap = &GameBitmaps[bm_index];
+
+		if (bitmap->bm_w == 0 || bitmap->bm_h == 0)
+		{
+			break; // RT_ArenaMemoryScope uses do/while, so break exits it
+		}
+
+		PIGGY_PAGE_IN((bitmap_index) { bm_index });
+
+		if (bitmap->bm_flags & BM_FLAG_RLE)
+		{
+			bitmap = rle_expand_texture(bitmap);
+		}
+
+		if (bitmap->bm_flags & BM_FLAG_RLE)
+		{
+			bitmap = rle_expand_texture(bitmap);
+		}
+
+		// Ensure transparency flags survive RLE expansion and page-in
+		bitmap->bm_flags |= GameBitmapFlags[bm_index] & (BM_FLAG_TRANSPARENT | BM_FLAG_SUPER_TRANSPARENT);
+
+		uint32_t* pixels = dx12_load_bitmap_pixel_data(&g_thread_arena, bitmap);
+
+		material->albedo_texture = RT_UploadTexture(&(RT_UploadTextureParams) {
+			.image.width = bitmap->bm_w,
+				.image.height = bitmap->bm_h,
+				.image.pixels = pixels,
+				.image.format = g_rt_material_texture_slot_formats[RT_MaterialTextureSlot_Albedo],
+				.name = RT_ArenaPrintF(&g_thread_arena, "Game Texture %hu:basecolor (original)", bm_index),
+		});
+
+#ifdef RT_DUMP_GAME_BITMAPS
+		{
+			const char* png_path = RT_ArenaPrintF(&g_thread_arena, "assets/texture_dump/%s.png", bitmap_name);
+			RT_WritePNGToDisk(png_path, bitmap->bm_w, bitmap->bm_h, 4, pixels, 4 * bitmap->bm_w);
+		}
+#endif
+		loaded = true;
+	}
+	return loaded;
+}
+
+void RT_SyncMaterialStates(void)
 {
 
 	for (uint16_t bm_index = 1; bm_index < MAX_BITMAP_FILES; bm_index++)
@@ -676,9 +726,9 @@ void RT_SyncMaterialStates(void)
 
 				RT_ArenaMemoryScope(&g_thread_arena)
 				{
-					
+
 					RT_LoadMaterialTexturesFromPaths(bm_index, material, paths, ~0u);
-					
+
 					material->texture_load_state = RT_MaterialTextureLoadState_Loaded;
 
 					RT_UpdateMaterial(bm_index, material);
@@ -691,108 +741,25 @@ void RT_SyncMaterialStates(void)
 				{
 					if (RT_RESOURCE_HANDLE_VALID(material->textures[i]))
 						RT_ReleaseTexture(material->textures[i]);
-							
+
 				}
 				material->texture_load_state = RT_MaterialTextureLoadState_Unloaded;
 
 				RT_UpdateMaterial(bm_index, material);
-				
+
 				// load the original low res texture (for the material viewer)
-				RT_ArenaMemoryScope(&g_thread_arena)
-				{
-					grs_bitmap* bitmap = &GameBitmaps[bm_index];
-
-					if (bitmap->bm_w == 0 ||
-						bitmap->bm_h == 0)
-					{
-						continue;
-					}
-
-					PIGGY_PAGE_IN((bitmap_index) { bm_index });
-
-					if (bitmap->bm_flags & BM_FLAG_RLE)
-					{
-						bitmap = rle_expand_texture(bitmap);
-					}
-
-					if (bitmap->bm_flags & BM_FLAG_RLE)
-					{
-						bitmap = rle_expand_texture(bitmap);
-					}
-
-					// Ensure transparency flags survive RLE expansion and page-in
-					bitmap->bm_flags |= GameBitmapFlags[bm_index] & (BM_FLAG_TRANSPARENT | BM_FLAG_SUPER_TRANSPARENT);
-
-					uint32_t* pixels = dx12_load_bitmap_pixel_data(&g_thread_arena, bitmap);
-
-					material->albedo_texture = RT_UploadTexture(&(RT_UploadTextureParams) {
-						.image.width = bitmap->bm_w,
-							.image.height = bitmap->bm_h,
-							.image.pixels = pixels,
-							.image.format = g_rt_material_texture_slot_formats[RT_MaterialTextureSlot_Albedo],
-							.name = RT_ArenaPrintF(&g_thread_arena, "Game Texture %hu:basecolor (original)", bm_index),
-					});
-
-#ifdef RT_DUMP_GAME_BITMAPS
-					{
-						const char* png_path = RT_ArenaPrintF(&g_thread_arena, "assets/texture_dump/%s.png", bitmap_name);
-						RT_WritePNGToDisk(png_path, bitmap->bm_w, bitmap->bm_h, 4, pixels, 4 * bitmap->bm_w);
-					}
-#endif
-				}
+				RT_LoadOriginalBitmapAsAlbedo(bm_index, material, bitmap_name);
 
 				RT_UpdateMaterial(bm_index, material);
 			}
 		}
 
 		// ensure that an albedo texture is present, if not load the original texture (mainly for material viewer)
-		
+
 		if (!RT_RESOURCE_HANDLE_VALID(material->albedo_texture))
 		{
-			RT_ArenaMemoryScope(&g_thread_arena)
-			{
-				grs_bitmap* bitmap = &GameBitmaps[bm_index];
+			RT_LoadOriginalBitmapAsAlbedo(bm_index, material, bitmap_name);
 
-				if (bitmap->bm_w == 0 ||
-					bitmap->bm_h == 0)
-				{
-					continue;
-				}
-
-				PIGGY_PAGE_IN((bitmap_index) { bm_index });
-
-
-				if (bitmap->bm_flags & BM_FLAG_RLE)
-				{
-					bitmap = rle_expand_texture(bitmap);
-				}
-
-				if (bitmap->bm_flags & BM_FLAG_RLE)
-				{
-					bitmap = rle_expand_texture(bitmap);
-				}
-
-				// Ensure transparency flags survive RLE expansion and page-in
-				bitmap->bm_flags |= GameBitmapFlags[bm_index] & (BM_FLAG_TRANSPARENT | BM_FLAG_SUPER_TRANSPARENT);
-
-				uint32_t* pixels = dx12_load_bitmap_pixel_data(&g_thread_arena, bitmap);
-
-				material->albedo_texture = RT_UploadTexture(&(RT_UploadTextureParams) {
-					.image.width = bitmap->bm_w,
-						.image.height = bitmap->bm_h,
-						.image.pixels = pixels,
-						.image.format = g_rt_material_texture_slot_formats[RT_MaterialTextureSlot_Albedo],
-						.name = RT_ArenaPrintF(&g_thread_arena, "Game Texture %hu:basecolor (original)", bm_index),
-				});
-
-#ifdef RT_DUMP_GAME_BITMAPS
-				{
-					const char* png_path = RT_ArenaPrintF(&g_thread_arena, "assets/texture_dump/%s.png", bitmap_name);
-					RT_WritePNGToDisk(png_path, bitmap->bm_w, bitmap->bm_h, 4, pixels, 4 * bitmap->bm_w);
-				}
-#endif
-			}
-			
 			RT_UpdateMaterial(bm_index, material);
 		}
 	}

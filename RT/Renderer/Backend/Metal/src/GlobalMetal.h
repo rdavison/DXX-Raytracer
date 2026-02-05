@@ -234,6 +234,9 @@ namespace RT
 	id<MTLBuffer> raytrace_tlas_scratch_buffer;    // Scratch buffer for TLAS builds
 	// Light buffer
 	id<MTLBuffer> raytrace_light_buffer;           // RT_Light array
+	// Argument buffer (Tier 2): holds all textures by natural index, eliminates 31-slot limit
+	id<MTLBuffer> raytrace_argument_buffer;        // Encoded texture array for bindless access
+	id<MTLArgumentEncoder> raytrace_arg_encoder;   // Encoder for the argument buffer
 #else
 	id raytrace_pipeline;
 	id raytrace_instance_buffer;
@@ -249,11 +252,27 @@ namespace RT
 	id raytrace_instance_desc_buffer;
 	id raytrace_tlas_scratch_buffer;
 	id raytrace_light_buffer;
+	id raytrace_argument_buffer;
+	id raytrace_arg_encoder;
 #endif
 		uint32_t raytrace_instance_count;
 		uint32_t raytrace_light_count;
 		std::vector<RT_ResourceHandle> raytrace_pending_meshes;
 		bool raytrace_materials_dirty;  // Flag to rebuild material buffer
+		bool use_argument_buffers;      // True if device supports Tier 2 argument buffers
+
+		// Async pipeline state
+		uint32_t tlas_buffer_index;     // Double-buffered TLAS: alternates 0/1
+#ifdef __OBJC__
+		id<MTLAccelerationStructure> raytrace_tlas_double[2];  // Two TLAS buffers
+		id<MTLBuffer> raytrace_tlas_scratch_double[2];
+		dispatch_semaphore_t compute_semaphore;                // Frame-pacing semaphore for async dispatch
+#else
+		id raytrace_tlas_double[2];
+		id raytrace_tlas_scratch_double[2];
+		void* compute_semaphore;
+#endif
+		bool texture_remap_dirty;       // Rescan triangles for texture remap only when mesh changes
 
 		// Mesh tracking
 		MeshTracker mesh_tracker;
