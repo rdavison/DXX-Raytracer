@@ -398,6 +398,12 @@ kernel void raytrace_main(
         // Apply Lambertian BRDF (energy conservation: diffuse = albedo / pi)
         float3 hdr = (albedo.rgb / 3.14159265) * total_light;
 
+        // Emissive contribution (self-illuminating surfaces glow regardless of lighting)
+        if (mat.emissive_factor > 0) {
+            float strength = float(mat.emissive_factor) / 255.0;
+            hdr += albedo.rgb * strength;
+        }
+
         // Exposure adjustment (matching DX12 default of 0.1)
         hdr *= exp2(0.1);
 
