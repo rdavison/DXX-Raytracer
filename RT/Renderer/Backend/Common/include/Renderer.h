@@ -26,6 +26,7 @@
 // skip the material edges array...
 #define RT_TRIANGLE_HOLDS_MATERIAL_EDGE  (1 << 31)
 #define RT_TRIANGLE_HOLDS_MATERIAL_INDEX (1 << 30)
+#define RT_TRIANGLE_ALPHA_CUTOUT         (1 << 29)
 #define RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE (0xFFFF)
 
 // Some built in materials to use
@@ -225,7 +226,8 @@ typedef enum RT_MaterialFlags
 	RT_MaterialFlag_BlackbodyRadiator = 0x1, // things like lava, basically just treats the albedo as an emissive map and skips all shading
 	RT_MaterialFlag_NoCastingShadow   = 0x2,
 	RT_MaterialFlag_Light             = 0x4,
-	RT_MaterialFlag_Fsr2ReactiveMask  = 0x8
+	RT_MaterialFlag_Fsr2ReactiveMask  = 0x8,
+	RT_MaterialFlag_AlphaCutout       = 0x10,
 } RT_MaterialFlags;
 
 typedef enum RT_MaterialTextureSlot

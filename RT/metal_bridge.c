@@ -11,6 +11,7 @@
 #include "globvars.h"
 #include "SDL.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 int get_centered_x(const char *s);
 void get_char_width(ubyte c, ubyte c2, int *width, int *spacing);
@@ -1027,6 +1028,54 @@ uint32_t* metal_load_bitmap_pixel_data(RT_Arena* arena, grs_bitmap* bitmap)
 #endif
 			}
 		}
+	}
+
+	// Flood fill from texture edges: mark border-connected transparent pixels
+	// so the shader can distinguish them from grate holes.
+	// Border pixels get alpha=64 (~0.25), grate holes stay alpha=0.
+	if (bitmap->bm_flags & (BM_FLAG_TRANSPARENT | BM_FLAG_SUPER_TRANSPARENT))
+	{
+		int w = bitmap->bm_w;
+		int h = bitmap->bm_h;
+		int total = w * h;
+		unsigned char* pix = (unsigned char*)pixels;
+
+		int* queue = (int*)malloc(total * sizeof(int));
+		int q_head = 0, q_tail = 0;
+
+		// Seed BFS with edge pixels that have alpha == 0
+		for (int ey = 0; ey < h; ey++) {
+			for (int ex = 0; ex < w; ex++) {
+				if (ey == 0 || ey == h - 1 || ex == 0 || ex == w - 1) {
+					int idx = ey * w + ex;
+					if (pix[idx * 4 + 3] == 0) {
+						pix[idx * 4 + 3] = 64;
+						queue[q_tail++] = idx;
+					}
+				}
+			}
+		}
+
+		// BFS: flood through alpha=0 pixels (4-connected)
+		while (q_head < q_tail) {
+			int idx = queue[q_head++];
+			int px = idx % w;
+			int py = idx / w;
+			int offsets[4][2] = {{-1,0},{1,0},{0,-1},{0,1}};
+			for (int d = 0; d < 4; d++) {
+				int nx = px + offsets[d][0];
+				int ny = py + offsets[d][1];
+				if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+					int nidx = ny * w + nx;
+					if (pix[nidx * 4 + 3] == 0) {
+						pix[nidx * 4 + 3] = 64;
+						queue[q_tail++] = nidx;
+					}
+				}
+			}
+		}
+
+		free(queue);
 	}
 
 	return pixels;

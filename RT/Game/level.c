@@ -273,6 +273,12 @@ RT_ResourceHandle RT_UploadLevelGeometry()
 					break;
 				}
 				
+				// Tag triangles on transparent walls (grates/bars) for alpha cutout in raytracing
+				if (s->wall_num != -1 && Walls[s->wall_num].type == WALL_CLOSED) {
+					triangles[num_triangles - 1].material_edge_index |= RT_TRIANGLE_ALPHA_CUTOUT;
+					triangles[num_triangles - 2].material_edge_index |= RT_TRIANGLE_ALPHA_CUTOUT;
+				}
+
 				RT_ExtractLightsFromSide(s, &verts[vertex_offset], triangles[num_triangles - 1].normal0, seg_id);
 
 				// Set tmaps next/future state to loaded so they will be loaded into memory

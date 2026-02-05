@@ -3,6 +3,7 @@
 // ------------------------------------------------------------------
 
 #include "piggy.h"
+#include "custom.h"
 
 // ------------------------------------------------------------------
 
@@ -534,6 +535,12 @@ void RT_InitAllBitmaps(void)
 				// metalness and roughness if it was affected by whether or not there was a metal/roughness map:
 				g_rt_materials_default[bm_index].roughness = material->roughness;
 			}
+
+			// Mark transparent/grate textures for alpha cutout in raytracing
+			if (GameBitmapFlags[bm_index] & (BM_FLAG_TRANSPARENT | BM_FLAG_SUPER_TRANSPARENT))
+			{
+				material->flags |= RT_MaterialFlag_AlphaCutout;
+			}
 		}
 
 		RT_SyncMaterialStates();
@@ -713,6 +720,9 @@ void RT_SyncMaterialStates(void)
 						bitmap = rle_expand_texture(bitmap);
 					}
 
+					// Ensure transparency flags survive RLE expansion and page-in
+					bitmap->bm_flags |= GameBitmapFlags[bm_index] & (BM_FLAG_TRANSPARENT | BM_FLAG_SUPER_TRANSPARENT);
+
 					uint32_t* pixels = dx12_load_bitmap_pixel_data(&g_thread_arena, bitmap);
 
 					material->albedo_texture = RT_UploadTexture(&(RT_UploadTextureParams) {
@@ -761,6 +771,9 @@ void RT_SyncMaterialStates(void)
 				{
 					bitmap = rle_expand_texture(bitmap);
 				}
+
+				// Ensure transparency flags survive RLE expansion and page-in
+				bitmap->bm_flags |= GameBitmapFlags[bm_index] & (BM_FLAG_TRANSPARENT | BM_FLAG_SUPER_TRANSPARENT);
 
 				uint32_t* pixels = dx12_load_bitmap_pixel_data(&g_thread_arena, bitmap);
 

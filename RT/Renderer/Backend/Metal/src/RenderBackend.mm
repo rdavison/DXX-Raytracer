@@ -1385,55 +1385,107 @@ namespace RenderBackend
 			// ============================================================
 			// Dynamic Texture Remapping: Build per-frame texture mapping
 			// ============================================================
-			// Step 1: Collect unique texture indices used by triangles this frame
 			constexpr uint32_t MAX_BOUND_TEXTURES = 31;
 			std::vector<uint32_t> used_texture_indices;
 			used_texture_indices.reserve(MAX_BOUND_TEXTURES);
 
-			// Helper lambda to get material index from material_indices (same logic as shader)
 			auto get_material_index = [](uint32_t material_edge) -> uint32_t {
-				// g_rt_material_indices is uint16_t[], so direct index access works
 				return g_rt_material_indices[material_edge];
 			};
 
-			// Scan triangles to find material_edge_index values and resolve to materials
+			// Step 1: Collect overlay (mat2) textures only for alpha cutout sides (grates)
+			// These get priority slots since they're needed for see-through rendering
+			uint32_t overlay_total = 0;
 			for (uint32_t tri_idx = 0; tri_idx < total_tris; tri_idx++) {
-				uint32_t mat_edge_idx = dst[tri_idx].material_edge_index;
+				uint32_t mat_edge_idx_raw = dst[tri_idx].material_edge_index;
+				if (!(mat_edge_idx_raw & RT_TRIANGLE_ALPHA_CUTOUT)) continue; // only grate sides
+				if (mat_edge_idx_raw & (RT_TRIANGLE_HOLDS_MATERIAL_INDEX | RT_TRIANGLE_HOLDS_MATERIAL_EDGE)) continue;
+				uint32_t mat_edge_idx = mat_edge_idx_raw & ~RT_TRIANGLE_ALPHA_CUTOUT;
+				if (mat_edge_idx >= RT_MAX_MATERIAL_EDGES) continue;
+
+				RT_MaterialEdge edge = g_rt_material_edges[mat_edge_idx];
+				uint16_t mat2_tmap = edge.mat2 & 0x3FFF;
+				if (mat2_tmap == 0) continue;
+
+				uint32_t mat2_idx = get_material_index(mat2_tmap);
+				if (mat2_idx >= RT_MAX_MATERIALS) continue;
+
+				uint32_t tex2_idx = g_rt_materials[mat2_idx].albedo_texture.index;
+				if (tex2_idx == 0 || tex2_idx >= RT_MAX_TEXTURES) continue;
+
+				bool found = false;
+				for (uint32_t k = 0; k < used_texture_indices.size(); k++) {
+					if (used_texture_indices[k] == tex2_idx) { found = true; break; }
+				}
+				if (!found && used_texture_indices.size() < MAX_BOUND_TEXTURES - 1) {
+					used_texture_indices.push_back(tex2_idx);
+					overlay_total++;
+				}
+			}
+
+			// Step 2: Fill remaining slots with base (mat1) textures
+			uint32_t base_tex_count = 0;
+			for (uint32_t tri_idx = 0; tri_idx < total_tris; tri_idx++) {
+				uint32_t mat_edge_idx_raw = dst[tri_idx].material_edge_index;
 				uint32_t mat_idx = 0;
 
-				// Resolve material index using the same logic as shader
-				if (mat_edge_idx & RT_TRIANGLE_HOLDS_MATERIAL_INDEX) {
-					mat_idx = mat_edge_idx & ~RT_TRIANGLE_HOLDS_MATERIAL_INDEX;
-				} else if (mat_edge_idx & RT_TRIANGLE_HOLDS_MATERIAL_EDGE) {
-					uint32_t edge_idx = mat_edge_idx & ~RT_TRIANGLE_HOLDS_MATERIAL_EDGE;
+				if (mat_edge_idx_raw & RT_TRIANGLE_HOLDS_MATERIAL_INDEX) {
+					mat_idx = mat_edge_idx_raw & ~RT_TRIANGLE_HOLDS_MATERIAL_INDEX;
+				} else if (mat_edge_idx_raw & RT_TRIANGLE_HOLDS_MATERIAL_EDGE) {
+					uint32_t edge_idx = mat_edge_idx_raw & ~RT_TRIANGLE_HOLDS_MATERIAL_EDGE;
 					mat_idx = get_material_index(edge_idx);
 				} else {
-					// Normal case: look up in material_edges, then material_indices
+					uint32_t mat_edge_idx = mat_edge_idx_raw & ~RT_TRIANGLE_ALPHA_CUTOUT;
 					if (mat_edge_idx < RT_MAX_MATERIAL_EDGES) {
 						RT_MaterialEdge edge = g_rt_material_edges[mat_edge_idx];
-						uint16_t mat1 = edge.mat1;
-						mat_idx = get_material_index(mat1);
+						mat_idx = get_material_index(edge.mat1);
 					}
 				}
 
-				// Clamp material index and get albedo texture index
 				if (mat_idx < RT_MAX_MATERIALS) {
 					uint32_t tex_idx = g_rt_materials[mat_idx].albedo_texture.index;
 					if (tex_idx > 0 && tex_idx < RT_MAX_TEXTURES) {
-						// Check if already in our list
 						bool found = false;
 						for (uint32_t k = 0; k < used_texture_indices.size(); k++) {
-							if (used_texture_indices[k] == tex_idx) {
-								found = true;
-								break;
-							}
+							if (used_texture_indices[k] == tex_idx) { found = true; break; }
 						}
 						if (!found && used_texture_indices.size() < MAX_BOUND_TEXTURES - 1) {
 							used_texture_indices.push_back(tex_idx);
+							base_tex_count++;
 						}
 					}
 				}
 			}
+
+			// Log cutout side details
+			static bool logged_cutout = false;
+			if (!logged_cutout) {
+				uint32_t cutout_tris = 0, cutout_with_mat2 = 0, cutout_no_mat2 = 0;
+				for (uint32_t ti = 0; ti < total_tris; ti++) {
+					uint32_t mei_raw = dst[ti].material_edge_index;
+					if (!(mei_raw & RT_TRIANGLE_ALPHA_CUTOUT)) continue;
+					cutout_tris++;
+					uint32_t mei = mei_raw & ~RT_TRIANGLE_ALPHA_CUTOUT;
+					if (mei < RT_MAX_MATERIAL_EDGES) {
+						RT_MaterialEdge edge = g_rt_material_edges[mei];
+						uint16_t mat1 = edge.mat1;
+						uint16_t mat2_tmap = edge.mat2 & 0x3FFF;
+						uint16_t orient = edge.mat2 >> 14;
+						uint32_t mat1_idx = get_material_index(mat1);
+						uint32_t mat2_idx = mat2_tmap ? get_material_index(mat2_tmap) : 0;
+						uint32_t tex1 = (mat1_idx < RT_MAX_MATERIALS) ? g_rt_materials[mat1_idx].albedo_texture.index : 0;
+						uint32_t tex2 = (mat2_idx > 0 && mat2_idx < RT_MAX_MATERIALS) ? g_rt_materials[mat2_idx].albedo_texture.index : 0;
+						MetalFileLog("[Metal] CutoutTri[%u]: mei=%u mat1=%u mat2_tmap=%u orient=%u mat1_idx=%u mat2_idx=%u tex1=%u tex2=%u",
+							ti, mei, mat1, mat2_tmap, orient, mat1_idx, mat2_idx, tex1, tex2);
+						if (mat2_tmap != 0) cutout_with_mat2++; else cutout_no_mat2++;
+					}
+				}
+				MetalFileLog("[Metal] CutoutSummary: %u cutout tris, %u with mat2, %u without mat2",
+					cutout_tris, cutout_with_mat2, cutout_no_mat2);
+				logged_cutout = true;
+			}
+			MetalFileLog("[Metal] TextureRemap: %u overlay + %u base = %zu total (of %u slots)",
+				overlay_total, base_tex_count, used_texture_indices.size(), MAX_BOUND_TEXTURES - 1);
 
 			// Step 2: Build remap table
 			// texture_remap[original_index] = remapped_slot (1-30), 0 = not mapped
@@ -1494,7 +1546,7 @@ namespace RenderBackend
 			scene->render_height = h;
 			scene->instance_count = g_mtl.raytrace_instance_count;
 			scene->total_triangles = total_tris;
-			scene->debug_mode = 0;  // 0=normal, 1=UVs, 2=material index
+			scene->debug_mode = 0;  // 0=normal, 1=UVs, 2=material index, 3=overlay debug, 4=cutout alpha
 			scene->texture_count = texture_count;
 			scene->use_accel = tlas_built ? 1 : 0;
 			scene->light_count = g_mtl.raytrace_light_count;

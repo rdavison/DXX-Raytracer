@@ -12,7 +12,10 @@ using namespace raytracing;
 // Constants matching Renderer.h
 #define RT_TRIANGLE_HOLDS_MATERIAL_EDGE  (1u << 31)
 #define RT_TRIANGLE_HOLDS_MATERIAL_INDEX (1u << 30)
+#define RT_TRIANGLE_ALPHA_CUTOUT         (1u << 29)
+#define RT_TRIANGLE_MEI_MASK             0x1FFFFFFFu  // mask out flag bits 29-31
 #define RT_MAX_TEXTURES 6030
+#define RT_MATERIAL_FLAG_ALPHA_CUTOUT    0x10
 
 struct Triangle {
     packed_float3 pos0;
@@ -125,10 +128,20 @@ uint resolve_material_index(uint material_edge_index, uint material_override,
         return get_material_index(material_indices, edge_idx);
     }
 
-    // Normal case: look up in material_edges, then material_indices
-    uint edge = material_edges[material_edge_index];
+    // Normal case: mask out flag bits, look up in material_edges, then material_indices
+    uint edge = material_edges[material_edge_index & RT_TRIANGLE_MEI_MASK];
     uint mat1 = edge & 0xFFFF;
     return get_material_index(material_indices, mat1);
+}
+
+// Rotate UVs based on overlay orientation (matches DX12 GetRotatedUVs)
+float2 rotate_overlay_uv(float2 uv, uint orient) {
+    switch (orient) {
+        case 1:  return float2(1.0 - uv.y, uv.x);
+        case 2:  return float2(1.0 - uv.x, 1.0 - uv.y);
+        case 3:  return float2(uv.y, 1.0 - uv.x);
+        default: return uv;
+    }
 }
 
 // ---- Tone mapping (matches DX12 post_process.hlsl) ----
@@ -216,12 +229,14 @@ kernel void raytrace_main(
         r.min_distance = 0.001;
         r.max_distance = 1e30;
 
-        intersector<triangle_data, instancing> i;
-        i.accept_any_intersection(false);  // We want closest hit
-        auto result = i.intersect(r, accel_struct);
+        // Loop to handle overlay transparency (grate see-through)
+        for (int bounce = 0; bounce < 8; bounce++) {
+            intersector<triangle_data, instancing> i;
+            i.accept_any_intersection(false);
+            auto result = i.intersect(r, accel_struct);
 
-        if (result.type == intersection_type::triangle) {
-            closest_t = result.distance;
+            if (result.type != intersection_type::triangle) break;
+
             uint inst_id = result.instance_id;
             uint prim_id = result.primitive_id;
             float2 bary = result.triangle_barycentric_coord;
@@ -233,27 +248,61 @@ kernel void raytrace_main(
             uint global_tri_idx = inst.triangle_offset + prim_id;
             constant Triangle& tri = triangles[global_tri_idx];
 
-            // Interpolate normal in object space, transform to world space
+            float2 uv = float2(tri.uv0) * w + float2(tri.uv1) * u + float2(tri.uv2) * v;
+
+            // Check overlay (mat2) for transparency — only on WALL_CLOSED sides (grates)
+            bool skip_hit = false;
+            uint mei_raw = tri.material_edge_index;
+            bool is_cutout_side = (mei_raw & RT_TRIANGLE_ALPHA_CUTOUT) != 0;
+            if (is_cutout_side &&
+                !(mei_raw & (RT_TRIANGLE_HOLDS_MATERIAL_INDEX | RT_TRIANGLE_HOLDS_MATERIAL_EDGE))) {
+                uint mei = mei_raw & RT_TRIANGLE_MEI_MASK;
+                uint edge = material_edges[mei];
+                uint mat2_tmap = (edge >> 16) & 0x3FFF;
+                if (mat2_tmap != 0) {
+                    uint mat2_idx = get_material_index(material_indices, mat2_tmap);
+                    mat2_idx = min(mat2_idx, (uint)(RT_MAX_TEXTURES - 1));
+                    constant Material& mat2 = materials[mat2_idx];
+                    uint tex2 = mat2.albedo_index;
+                    if (tex2 > 0 && tex2 < RT_MAX_TEXTURES) {
+                        uint slot2 = texture_remap[tex2];
+                        if (slot2 > 0 && slot2 < MAX_BOUND_TEXTURES) {
+                            uint orient = (edge >> 30) & 3;
+                            float2 uv_rot = rotate_overlay_uv(uv, orient);
+                            float overlay_alpha = textures[slot2].sample(tex_sampler, uv_rot).a;
+                            // alpha=0.0: grate hole (flood fill couldn't reach from edge)
+                            // alpha~0.25: border area (flood fill marked from edge)
+                            // alpha=1.0: opaque bar
+                            if (overlay_alpha < 0.1) {
+                                skip_hit = true; // Grate hole — see through
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (skip_hit && scene.debug_mode != 4) {
+                r.origin = r.origin + r.direction * (result.distance + 0.002);
+                continue;
+            }
+
+            // Solid hit — record it
+            closest_t = result.distance + length(r.origin - ro);
+
             float3 n0 = float3(tri.normal0);
             float3 n1 = float3(tri.normal1);
             float3 n2 = float3(tri.normal2);
             float3 obj_normal = normalize(n0 * w + n1 * u + n2 * v);
             hit_normal = normalize((inst.world_to_object * float4(obj_normal, 0.0)).xyz);
 
-            // Interpolate UV
-            float2 uv0 = float2(tri.uv0);
-            float2 uv1 = float2(tri.uv1);
-            float2 uv2 = float2(tri.uv2);
-            hit_uv = uv0 * w + uv1 * u + uv2 * v;
-
-            // Material info
+            hit_uv = uv;
             hit_material_index = tri.material_edge_index;
             hit_instance_material_override = inst.material_override;
 
-            // Vertex/instance color
             uint c = tri.color ? tri.color : inst.color;
             hit_color = float4(float(c & 0xFF) / 255.0, float((c >> 8) & 0xFF) / 255.0,
                                float((c >> 16) & 0xFF) / 255.0, 1.0);
+            break;
         }
     } else {
         // ============================================================
@@ -327,6 +376,21 @@ kernel void raytrace_main(
 
         float4 albedo = hit_color;
 
+        // Check for overlay texture (mat2) for rendering
+        uint overlay_mat_idx = 0;
+        float2 overlay_uv = hit_uv;
+        if (!(hit_instance_material_override) &&
+            !(hit_material_index & (RT_TRIANGLE_HOLDS_MATERIAL_INDEX | RT_TRIANGLE_HOLDS_MATERIAL_EDGE))) {
+            uint edge = material_edges[hit_material_index & RT_TRIANGLE_MEI_MASK];
+            uint mat2_tmap = (edge >> 16) & 0x3FFF;
+            if (mat2_tmap != 0) {
+                uint orient = (edge >> 30) & 3;
+                overlay_mat_idx = get_material_index(material_indices, mat2_tmap);
+                overlay_mat_idx = min(overlay_mat_idx, (uint)(RT_MAX_TEXTURES - 1));
+                overlay_uv = rotate_overlay_uv(hit_uv, orient);
+            }
+        }
+
         if (scene.debug_mode == 1) {
             albedo = float4(fract(hit_uv.x), fract(hit_uv.y), 0.5, 1.0);
         }
@@ -334,11 +398,118 @@ kernel void raytrace_main(
             float hue = fract(float(mat_idx) * 0.1);
             albedo = float4(hue, 1.0 - hue, fract(hue * 3.0), 1.0);
         }
-        else if (tex_idx > 0 && tex_idx < RT_MAX_TEXTURES) {
-            uint slot = texture_remap[tex_idx];
-            if (slot > 0 && slot < MAX_BOUND_TEXTURES) {
-                albedo = textures[slot].sample(tex_sampler, hit_uv);
-                albedo.rgb *= hit_color.rgb;
+        else if (scene.debug_mode == 3) {
+            // Overlay debug visualization:
+            // DARK RED = special tri (holds_mat_idx/holds_mat_edge)
+            // RED = no overlay, MAGENTA = overlay but no cutout flag (screens etc)
+            // GREEN = cutout side with overlay alpha (bright=opaque bar, dark=hole)
+            // BLUE = overlay not in remap, YELLOW = overlay no albedo
+            uint dbg_mei_raw = hit_material_index;
+            bool dbg_cutout = (dbg_mei_raw & RT_TRIANGLE_ALPHA_CUTOUT) != 0;
+            if (hit_instance_material_override != 0 ||
+                (dbg_mei_raw & (RT_TRIANGLE_HOLDS_MATERIAL_INDEX | RT_TRIANGLE_HOLDS_MATERIAL_EDGE))) {
+                albedo = float4(0.5, 0.0, 0.0, 1.0); // Dark red = special triangle type
+            } else {
+                uint dbg_mei = dbg_mei_raw & RT_TRIANGLE_MEI_MASK;
+                uint dbg_edge = material_edges[dbg_mei];
+                uint dbg_mat2_tmap = (dbg_edge >> 16) & 0x3FFF;
+                if (dbg_mat2_tmap == 0) {
+                    albedo = float4(0.3, 0.0, 0.0, 1.0); // Dark red = no overlay
+                } else if (!dbg_cutout) {
+                    albedo = float4(0.8, 0.0, 0.8, 1.0); // Magenta = overlay but NOT cutout side
+                } else {
+                    uint dbg_mat2_idx = get_material_index(material_indices, dbg_mat2_tmap);
+                    constant Material& dbg_mat2 = materials[min(dbg_mat2_idx, (uint)(RT_MAX_TEXTURES - 1))];
+                    uint dbg_tex2 = dbg_mat2.albedo_index;
+                    if (dbg_tex2 == 0 || dbg_tex2 >= RT_MAX_TEXTURES) {
+                        albedo = float4(1.0, 1.0, 0.0, 1.0); // Yellow = overlay but no albedo texture
+                    } else {
+                        uint dbg_slot2 = texture_remap[dbg_tex2];
+                        if (dbg_slot2 == 0 || dbg_slot2 >= MAX_BOUND_TEXTURES) {
+                            albedo = float4(0.0, 0.0, float(dbg_tex2 % 256) / 255.0, 1.0); // Blue = not in remap
+                        } else {
+                            uint dbg_orient = (dbg_edge >> 30) & 3;
+                            float2 dbg_uv_rot = rotate_overlay_uv(hit_uv, dbg_orient);
+                            float4 dbg_sample = textures[dbg_slot2].sample(tex_sampler, dbg_uv_rot);
+                            albedo = float4(0.0, dbg_sample.a, dbg_sample.a * 0.5, 1.0); // Green=alpha
+                        }
+                    }
+                }
+            }
+        }
+        else if (scene.debug_mode == 4) {
+            // Show overlay alpha for cutout sides, normal base texture for others
+            bool dbg4_cutout = (hit_material_index & RT_TRIANGLE_ALPHA_CUTOUT) != 0;
+            if (dbg4_cutout && !(hit_material_index & (RT_TRIANGLE_HOLDS_MATERIAL_INDEX | RT_TRIANGLE_HOLDS_MATERIAL_EDGE))) {
+                uint dbg4_mei = hit_material_index & RT_TRIANGLE_MEI_MASK;
+                uint dbg4_edge = material_edges[dbg4_mei];
+                uint dbg4_mat2_tmap = (dbg4_edge >> 16) & 0x3FFF;
+                if (dbg4_mat2_tmap != 0) {
+                    uint dbg4_mat2_idx = get_material_index(material_indices, dbg4_mat2_tmap);
+                    constant Material& dbg4_mat2 = materials[min(dbg4_mat2_idx, (uint)(RT_MAX_TEXTURES - 1))];
+                    uint dbg4_tex2 = dbg4_mat2.albedo_index;
+                    uint dbg4_slot2 = (dbg4_tex2 > 0 && dbg4_tex2 < RT_MAX_TEXTURES) ? texture_remap[dbg4_tex2] : 0;
+                    if (dbg4_slot2 > 0 && dbg4_slot2 < MAX_BOUND_TEXTURES) {
+                        uint dbg4_orient = (dbg4_edge >> 30) & 3;
+                        float2 dbg4_uv = rotate_overlay_uv(hit_uv, dbg4_orient);
+                        float4 dbg4_sample = textures[dbg4_slot2].sample(tex_sampler, dbg4_uv);
+                        // RED channel = overlay alpha, GREEN = base texture present
+                        uint dbg4_base_slot = (tex_idx > 0 && tex_idx < RT_MAX_TEXTURES) ? texture_remap[tex_idx] : 0;
+                        float base_ok = (dbg4_base_slot > 0) ? 1.0 : 0.0;
+                        albedo = float4(dbg4_sample.a, base_ok * 0.3, 0.0, 1.0);
+                    } else {
+                        albedo = float4(0.0, 0.0, 1.0, 1.0); // Blue = overlay not in remap
+                    }
+                } else {
+                    // Cutout side but no overlay — show in cyan
+                    albedo = float4(0.0, 1.0, 1.0, 1.0);
+                }
+            } else {
+                // Non-cutout: render normally
+                if (tex_idx > 0 && tex_idx < RT_MAX_TEXTURES) {
+                    uint slot = texture_remap[tex_idx];
+                    if (slot > 0 && slot < MAX_BOUND_TEXTURES) {
+                        albedo = textures[slot].sample(tex_sampler, hit_uv);
+                        albedo.rgb *= hit_color.rgb;
+                    }
+                }
+                if (overlay_mat_idx != 0) {
+                    constant Material& mat2 = materials[overlay_mat_idx];
+                    uint tex2_idx = mat2.albedo_index;
+                    if (tex2_idx > 0 && tex2_idx < RT_MAX_TEXTURES) {
+                        uint slot2 = texture_remap[tex2_idx];
+                        if (slot2 > 0 && slot2 < MAX_BOUND_TEXTURES) {
+                            float4 overlay_color = textures[slot2].sample(tex_sampler, overlay_uv);
+                            if (overlay_color.a >= 0.5) {
+                                albedo.rgb = overlay_color.rgb * hit_color.rgb;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        else {
+            // Sample base texture first
+            if (tex_idx > 0 && tex_idx < RT_MAX_TEXTURES) {
+                uint slot = texture_remap[tex_idx];
+                if (slot > 0 && slot < MAX_BOUND_TEXTURES) {
+                    albedo = textures[slot].sample(tex_sampler, hit_uv);
+                    albedo.rgb *= hit_color.rgb;
+                }
+            }
+            // If overlay exists and pixel is opaque, render overlay on top
+            if (overlay_mat_idx != 0) {
+                constant Material& mat2 = materials[overlay_mat_idx];
+                uint tex2_idx = mat2.albedo_index;
+                if (tex2_idx > 0 && tex2_idx < RT_MAX_TEXTURES) {
+                    uint slot2 = texture_remap[tex2_idx];
+                    if (slot2 > 0 && slot2 < MAX_BOUND_TEXTURES) {
+                        float4 overlay_color = textures[slot2].sample(tex_sampler, overlay_uv);
+                        if (overlay_color.a >= 0.5) {
+                            albedo.rgb = overlay_color.rgb * hit_color.rgb;
+                        }
+                    }
+                }
             }
         }
 
