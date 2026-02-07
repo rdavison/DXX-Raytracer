@@ -1,0 +1,54 @@
+[package]
+name = "rt-renderer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+objc2 = "0.6"
+objc2-metal = { version = "0.3", features = [
+    "MTLDevice",
+    "MTLCommandQueue",
+    "MTLCommandBuffer",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLTexture",
+    "MTLDrawable",
+    "MTLPixelFormat",
+    "MTLRenderPipeline",
+    "MTLVertexDescriptor",
+    "MTLBuffer",
+    "MTLLibrary",
+    "MTLSampler",
+    "MTLResource",
+    "MTLComputePipeline",
+    "MTLComputeCommandEncoder",
+    "MTLComputePass",
+    "MTLAccelerationStructure",
+    "MTLAccelerationStructureCommandEncoder",
+    "MTLAccelerationStructureTypes",
+    "MTLHeap",
+    "MTLFunctionDescriptor",
+    "block2",
+] }
+objc2-quartz-core = { version = "0.3", features = [
+    "CAMetalLayer",
+    "CALayer",
+    "objc2-metal",
+] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSWindow",
+    "NSView",
+    "NSResponder",
+] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSError", "NSArray"] }
+block2 = "0.6"
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+lto = true

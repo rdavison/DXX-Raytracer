@@ -81,9 +81,6 @@ static bool RT_DoorStatesChanged(void)
 			changed = true;
 			g_prev_door_passable[i] = passable_now;
 		}
-
-		// Note: Door texture changes during animation are handled by RT_UpdateMaterialEdges()
-		// which updates material edges every frame. No need to rebuild geometry for textures.
 	}
 
 	return changed;
@@ -261,6 +258,14 @@ RT_ResourceHandle RT_UploadLevelGeometry()
 						bool passable = RT_IsDoorPassable(w);
 						should_render = !passable;
 					}
+					else if (w->type == WALL_CLOSED)
+					{
+						// Grate walls exist on both sides of the shared face.
+						// Only emit triangles from the lower segment index to
+						// avoid coplanar overlap (causes TV static artifacts).
+						short child_seg = seg->children[side_index];
+						should_render = (child_seg < 0 || seg_id < child_seg);
+					}
 					else if (w->type != WALL_OPEN)
 					{
 						should_render = true;
@@ -291,9 +296,9 @@ RT_ResourceHandle RT_UploadLevelGeometry()
 					triangles[num_triangles - 2].material_edge_index |= RT_TRIANGLE_ALPHA_CUTOUT;
 				}
 
-				// Tag ALL door triangles for alpha cutout so rays can pass through during animation.
-				// When closed, door texture is opaque so alpha cutout has no effect.
-				// When animating, transparent parts of door texture allow rays through.
+				// Tag door triangles for alpha cutout so rays pass through transparent parts.
+				// Palette index 255 is now always converted to alpha=0, so door animations
+				// should have proper transparency for the opening parts.
 				if (s->wall_num != -1 && Walls[s->wall_num].type == WALL_DOOR) {
 					triangles[num_triangles - 1].material_edge_index |= RT_TRIANGLE_ALPHA_CUTOUT;
 					triangles[num_triangles - 2].material_edge_index |= RT_TRIANGLE_ALPHA_CUTOUT;
