@@ -36,6 +36,9 @@ struct SceneConstants {
     uint   texture_count;
     uint   use_accel;
     uint   light_count;
+    float  billboard_opacity_threshold;
+    float  billboard_emissive_boost;
+    uint   _pad4[2];
 };
 
 struct Instance {
@@ -587,7 +590,7 @@ kernel void raytrace_main(
                 continue;
             }
 
-            // Billboard/rod: additive emissive glow (energy/plasma/explosions)
+            // Billboard/rod: two-tier rendering (opaque subject + glow halo)
             if (tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
                 float4 bb_inst_color = decode_color(inst.color);
                 float bb_alpha = 1.0;
@@ -605,16 +608,22 @@ kernel void raytrace_main(
                     }
                 }
 
-                if (bb_alpha < 0.1) {
+                if (bb_alpha >= scene.billboard_opacity_threshold) {
+                    // Opaque billboard subject: self-lit, no tonemapping (already LDR)
+                    float3 boosted = bb_color * scene.billboard_emissive_boost;
+                    float3 blended = saturate(boosted) + accum_color;
+                    final_color = float4(LinearTosRGB(blended), 1.0);
+                    break;
+                } else if (bb_alpha >= 0.1) {
+                    // Halo glow: translucent additive with emissive boost, continue ray
+                    accum_color += bb_color * bb_alpha * scene.billboard_emissive_boost;
+                    r.origin = r.origin + r.direction * (intersection.distance + 0.002);
+                    continue;
+                } else {
+                    // Hole: skip entirely
                     r.origin = r.origin + r.direction * (intersection.distance + 0.002);
                     continue;
                 }
-
-                // Additive glow: billboard emits light, doesn't occlude
-                accum_color += bb_color * bb_alpha;
-
-                r.origin = r.origin + r.direction * (intersection.distance + 0.002);
-                continue;
             }
 
             // Solid hit (non-billboard geometry)

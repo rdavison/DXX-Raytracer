@@ -34,7 +34,7 @@ pub struct RaytraceInstance {
     pub _pad: [u32; 3],             // 12
 }
 
-/// Scene constants — 112 bytes, matches shader SceneConstants struct.
+/// Scene constants — 128 bytes, matches shader SceneConstants struct.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RaytraceSceneConstants {
@@ -58,6 +58,9 @@ pub struct RaytraceSceneConstants {
     pub texture_count: u32,
     pub use_accel: u32,
     pub light_count: u32,
+    pub billboard_opacity_threshold: f32,
+    pub billboard_emissive_boost: f32,
+    pub _pad4: [u32; 2],  // pad to 128 bytes (16-byte aligned)
 }
 
 /// Instance resolved against the mesh slotmap — ready for GPU upload.
@@ -451,6 +454,9 @@ pub fn dispatch(
         texture_count: remap.textures.len() as u32,
         use_accel,
         light_count: lights.len() as u32,
+        billboard_opacity_threshold: 0.8,
+        billboard_emissive_boost: 2.5,
+        _pad4: [0; 2],
     };
 
     // 6. Write data into pre-allocated buffers
