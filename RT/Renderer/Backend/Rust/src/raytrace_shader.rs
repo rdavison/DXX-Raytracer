@@ -292,25 +292,8 @@ ShadowResult trace_shadow_visibility(
             continue;
         }
 
-        // Billboard/rod: attenuate visibility by alpha
+        // Billboard/rod: transparent to shadow rays (gas/plasma doesn't cast shadows)
         if (s_tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
-            float s_bb_alpha = 1.0;
-            if (s_inst.material_override > 0u) {
-                uint s_albedo = gpu_materials[s_inst.material_override].albedo_index;
-                if (s_albedo > 0u && s_albedo < remap_table_size) {
-                    uint s_slot = texture_remap[s_albedo];
-                    if (s_slot > 0u) {
-                        s_bb_alpha = alpha_textures[s_slot].sample(tex_sampler, s_hit_uv).a;
-                    }
-                }
-            }
-            if (s_bb_alpha < 0.1) {
-                shadow_ray.origin = shadow_ray.origin + shadow_ray.direction * (shadow_hit.distance + 0.002);
-                dist_traveled += shadow_hit.distance + 0.002;
-                continue;
-            }
-            result.visibility *= (1.0 - s_bb_alpha);
-            if (result.visibility < 0.01) { result.visibility = 0.0; break; }
             shadow_ray.origin = shadow_ray.origin + shadow_ray.direction * (shadow_hit.distance + 0.002);
             dist_traveled += shadow_hit.distance + 0.002;
             continue;
@@ -563,7 +546,7 @@ kernel void raytrace_main(
                 continue;
             }
 
-            // Billboard/rod: composite translucent color, continue ray through
+            // Billboard/rod: additive emissive glow (energy/plasma/explosions)
             if (tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
                 float4 bb_inst_color = decode_color(inst.color);
                 float bb_alpha = 1.0;
@@ -586,11 +569,8 @@ kernel void raytrace_main(
                     continue;
                 }
 
-                float remaining = 1.0 - accum_alpha;
-                accum_color += bb_color * bb_alpha * remaining;
-                accum_alpha += bb_alpha * remaining;
-
-                if (accum_alpha > 0.99) break;
+                // Additive glow: billboard emits light, doesn't occlude
+                accum_color += bb_color * bb_alpha;
 
                 r.origin = r.origin + r.direction * (intersection.distance + 0.002);
                 continue;
@@ -758,12 +738,11 @@ kernel void raytrace_main(
             hdr *= exp2(0.1); // exposure
             float3 shaded = ApplyTonemappingCurve(hdr);
 
-            // Blend with accumulated billboard transparency
-            float remaining = 1.0 - accum_alpha;
-            float3 blended = accum_color + shaded * remaining;
+            // Additive billboard glow on top of shaded background
+            float3 blended = shaded + accum_color;
             final_color = float4(LinearTosRGB(blended), 1.0);
-        } else if (accum_alpha > 0.0) {
-            // Only billboard hits, no solid background
+        } else if (accum_color.r + accum_color.g + accum_color.b > 0.0) {
+            // Only billboard glow, no solid background
             final_color = float4(LinearTosRGB(accum_color), 1.0);
         }
     } else {
