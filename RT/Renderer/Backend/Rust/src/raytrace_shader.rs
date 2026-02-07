@@ -82,6 +82,8 @@ struct Light {
 // ============================================================================
 
 constant uint RT_TRIANGLE_ALPHA_CUTOUT = (1u << 29);
+constant uint RT_TRIANGLE_HOLDS_MATERIAL_INDEX = (1u << 30);
+constant uint RT_TRIANGLE_HOLDS_MATERIAL_EDGE  = (1u << 31);
 constant uint RT_TRIANGLE_MEI_MASK     = 0x1FFFFFFFu;
 constant uint RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE = 0xFFFFu;
 constant uint RT_MAT2_DOOR_SHIFT       = 10;
@@ -114,6 +116,29 @@ float4 sample_bindless(uint tex_idx, float2 uv,
 // Look up a u16 material index from the packed u16 array
 uint get_material_index(uint tmap_num, constant ushort* material_indices) {
     return uint(material_indices[tmap_num]);
+}
+
+// Resolve material index for both polymodel and level geometry triangles.
+// Polymodels set RT_TRIANGLE_HOLDS_MATERIAL_EDGE (bit 31) or
+// RT_TRIANGLE_HOLDS_MATERIAL_INDEX (bit 30) in material_edge_index.
+// Level geometry uses material_edges[] indirection.
+uint resolve_material_index(uint material_edge_index,
+                            constant uint* material_edges,
+                            constant ushort* material_indices) {
+    // Polymodel: direct material index via material_indices lookup
+    if (material_edge_index & RT_TRIANGLE_HOLDS_MATERIAL_EDGE) {
+        uint edge_idx = material_edge_index & ~RT_TRIANGLE_HOLDS_MATERIAL_EDGE;
+        return get_material_index(edge_idx, material_indices);
+    }
+    // Polymodel: direct material index (no indirection)
+    if (material_edge_index & RT_TRIANGLE_HOLDS_MATERIAL_INDEX) {
+        return material_edge_index & ~RT_TRIANGLE_HOLDS_MATERIAL_INDEX;
+    }
+    // Level geometry: material_edges → material_indices
+    uint mei = material_edge_index & RT_TRIANGLE_MEI_MASK;
+    uint edge = material_edges[mei];
+    uint mat1 = edge & 0xFFFFu;
+    return get_material_index(mat1, material_indices);
 }
 
 // Rotate UV by orientation (0=0°, 1=90°, 2=180°, 3=270°)
@@ -632,34 +657,34 @@ kernel void raytrace_main(
             // Interpolate UV at hit point for texture sampling
             float2 solid_uv = float2(tri.uv0) * w0 + float2(tri.uv1) * hit_bary.x + float2(tri.uv2) * hit_bary.y;
 
-            // Sample base texture and overlay via bindless texture array
+            // Sample texture via bindless texture array
             if (tri.material_edge_index != RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
                 uint mei_raw = tri.material_edge_index;
-                uint mei = mei_raw & RT_TRIANGLE_MEI_MASK;
-                uint edge = material_edges[mei];
-                uint mat1_tex = edge & 0xFFFFu;
-                uint mat2_raw = (edge >> 16) & 0xFFFFu;
-                uint mat2_tex = mat2_raw & 0x03FFu;
-                uint orientation = (mat2_raw & RT_MAT2_ORIENT_MASK) >> RT_MAT2_ORIENT_SHIFT;
+                bool is_polymodel = (mei_raw & (RT_TRIANGLE_HOLDS_MATERIAL_EDGE | RT_TRIANGLE_HOLDS_MATERIAL_INDEX)) != 0;
 
-                // Sample base texture (mat1_tex=0 is valid — it's tmap_num 0)
-                {
-                    uint mat_slot = get_material_index(mat1_tex, material_indices);
-                    uint base_tex = gpu_materials[mat_slot].albedo_index;
-                    float4 base_sample = sample_bindless(base_tex, solid_uv, tex_array, tex_sampler);
-                    if (base_sample.a > 0.0) {
-                        albedo = base_sample.rgb * inst_color.rgb;
-                    }
+                // Resolve base material (works for both polymodels and level geometry)
+                uint mat_slot = resolve_material_index(mei_raw, material_edges, material_indices);
+                uint base_tex = gpu_materials[mat_slot].albedo_index;
+                float4 base_sample = sample_bindless(base_tex, solid_uv, tex_array, tex_sampler);
+                if (base_sample.a > 0.0) {
+                    albedo = base_sample.rgb * inst_color.rgb;
                 }
 
-                // Overlay texture (layered on top)
-                if (mat2_tex > 0u) {
-                    uint mat2_slot = get_material_index(mat2_tex, material_indices);
-                    uint overlay_tex = gpu_materials[mat2_slot].albedo_index;
-                    float2 overlay_uv = (orientation > 0u) ? rotate_uv(solid_uv, orientation) : solid_uv;
-                    float4 overlay_sample = sample_bindless(overlay_tex, overlay_uv, tex_array, tex_sampler);
-                    if (overlay_sample.a >= 0.5) {
-                        albedo = overlay_sample.rgb * inst_color.rgb;
+                // Overlay texture (level geometry only — polymodels don't have overlays)
+                if (!is_polymodel) {
+                    uint mei = mei_raw & RT_TRIANGLE_MEI_MASK;
+                    uint edge = material_edges[mei];
+                    uint mat2_raw = (edge >> 16) & 0xFFFFu;
+                    uint mat2_tex = mat2_raw & 0x03FFu;
+                    uint orientation = (mat2_raw & RT_MAT2_ORIENT_MASK) >> RT_MAT2_ORIENT_SHIFT;
+                    if (mat2_tex > 0u) {
+                        uint mat2_slot = get_material_index(mat2_tex, material_indices);
+                        uint overlay_tex = gpu_materials[mat2_slot].albedo_index;
+                        float2 overlay_uv = (orientation > 0u) ? rotate_uv(solid_uv, orientation) : solid_uv;
+                        float4 overlay_sample = sample_bindless(overlay_tex, overlay_uv, tex_array, tex_sampler);
+                        if (overlay_sample.a >= 0.5) {
+                            albedo = overlay_sample.rgb * inst_color.rgb;
+                        }
                     }
                 }
             }
@@ -773,11 +798,8 @@ kernel void raytrace_main(
             // Emissive contribution (self-illuminating surfaces glow regardless of lighting)
             {
                 uint mei_raw = tri.material_edge_index;
-                uint mei = mei_raw & RT_TRIANGLE_MEI_MASK;
-                uint edge = material_edges[mei];
-                uint mat1_tex = edge & 0xFFFFu;
-                if (mat1_tex > 0u) {
-                    uint mat_slot = get_material_index(mat1_tex, material_indices);
+                if (mei_raw != RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
+                    uint mat_slot = resolve_material_index(mei_raw, material_edges, material_indices);
                     uint ef = gpu_materials[mat_slot].emissive_factor;
                     if (ef > 0u) {
                         float strength = float(ef) / 255.0;
