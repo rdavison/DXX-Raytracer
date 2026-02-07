@@ -232,7 +232,11 @@ pub struct Mat34 {
 // Resource handle (ApiTypes.h)
 // ============================================================================
 
-#[repr(C)]
+/// Matches C `RT_ResourceHandle` which contains a `union { ...; uint64_t value; }`,
+/// giving it 8-byte alignment. Without `align(8)`, Rust would use 4-byte alignment
+/// (two u32 fields), causing struct layout mismatches in any containing struct
+/// (e.g. RenderMeshParams fields shift by 4 bytes, garbling mesh handles).
+#[repr(C, align(8))]
 #[derive(Clone, Copy, Debug)]
 pub struct ResourceHandle {
     pub index: u32,
@@ -460,3 +464,16 @@ pub struct Material {
     pub texture_load_state: u32,
     pub texture_load_state_next: u32,
 }
+
+// ============================================================================
+// Layout assertions — catch C/Rust struct mismatches at compile time
+// ============================================================================
+
+const _: () = {
+    assert!(std::mem::size_of::<ResourceHandle>() == 8);
+    assert!(std::mem::align_of::<ResourceHandle>() == 8);
+
+    // RenderMeshParams field offsets must match C layout:
+    //   key(8) + flags(4) + pad(4) + mesh_handle(8) + transform(8) + prev_transform(8) + color(4) + material_override(2) + pad(2) = 48
+    assert!(std::mem::size_of::<RenderMeshParams>() == 48);
+};
