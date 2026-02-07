@@ -611,7 +611,7 @@ void draw_polygon_model(_RT_DRAW_POLY vms_vector* pos, vms_matrix* orient, vms_a
 					.submodel_index = i,
 				};
 
-				RT_DrawSubPolyModel(po->submodel[i], &combined_matrix, key);
+				RT_DrawSubPolyModel(po->submodel[i], &combined_matrix, key, object_type);
 
 				// g_rt_prev_submodel_transforms[objNum].transforms[i] = combined_matrix;
 #endif //RT_DX12

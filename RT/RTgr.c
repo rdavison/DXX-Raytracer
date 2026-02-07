@@ -1113,7 +1113,7 @@ void RT_DrawPolyModel(const int meshnumber, const int signature, ubyte object_ty
 	}
 }
 
-void RT_DrawSubPolyModel(RT_ResourceHandle submodel, const RT_Mat4* const submodel_transform, RT_RenderKey key)
+void RT_DrawSubPolyModel(RT_ResourceHandle submodel, const RT_Mat4* const submodel_transform, RT_RenderKey key, ubyte object_type)
 {
 	if (RT_RESOURCE_HANDLE_VALID(submodel))
 	{
@@ -1133,6 +1133,10 @@ void RT_DrawSubPolyModel(RT_ResourceHandle submodel, const RT_Mat4* const submod
 
 		RT_Vec4 color = { component, component, component, alpha };
 
+		if (object_type == 2) { // OBJ_ROBOT
+			color.x = 1.0f; color.y = 0.0f; color.z = 0.0f;
+		}
+
 		RT_RenderMeshParams params =
 		{
 			.key = key,
@@ -1144,7 +1148,7 @@ void RT_DrawSubPolyModel(RT_ResourceHandle submodel, const RT_Mat4* const submod
 	}
 }
 
-void RT_DrawPolySubModelTree(const polymodel* model, const vms_angvec* const anim_angles, int submodel_index, const int signature, const RT_Mat4 submodel_transform)
+void RT_DrawPolySubModelTree(const polymodel* model, const vms_angvec* const anim_angles, int submodel_index, const int signature, const RT_Mat4 submodel_transform, ubyte object_type)
 {
 	RT_RenderKey key =
 	{
@@ -1153,7 +1157,7 @@ void RT_DrawPolySubModelTree(const polymodel* model, const vms_angvec* const ani
 	};
 
 	// Draw the submodel
-	RT_DrawSubPolyModel(model->submodel[submodel_index], &submodel_transform, key);
+	RT_DrawSubPolyModel(model->submodel[submodel_index], &submodel_transform, key, object_type);
 
 	// Traverse tree structure
 	for (int i = 0; i < model->model_tree[submodel_index].n_children; ++i) {
@@ -1186,7 +1190,7 @@ void RT_DrawPolySubModelTree(const polymodel* model, const vms_angvec* const ani
 		// Combine them into one big matrix
 		RT_Mat4 combined_matrix = RT_Mat4Mul(offset_mat4, rotation_mat4);
 
-		RT_DrawPolySubModelTree(model, anim_angles, child_index, signature, combined_matrix);
+		RT_DrawPolySubModelTree(model, anim_angles, child_index, signature, combined_matrix, object_type);
 	}
 }
 
@@ -1210,7 +1214,7 @@ void RT_DrawPolyModelTree(const int meshnumber, const int signature, ubyte objec
     // Combine them into one big matrix
     RT_Mat4 combined_matrix = RT_Mat4Mul(offset_mat4, rotation_mat4);
 
-    RT_DrawPolySubModelTree(model, anim_angles, 0, signature, combined_matrix);
+    RT_DrawPolySubModelTree(model, anim_angles, 0, signature, combined_matrix, object_type);
 }
 
 void RT_DrawGLTF(const RT_GLTFNode* node, RT_Mat4 transform, RT_Mat4 prev_transform)
