@@ -136,19 +136,17 @@ pub fn build_blas(
 }
 
 // ============================================================================
-// TlasState — double-buffered TLAS management
+// TlasState — TLAS management
 // ============================================================================
 
-/// Double-buffered top-level acceleration structure state.
+/// Top-level acceleration structure state.
 ///
-/// Manages two TLAS slots for alternating builds. When the set of instances
-/// (same mesh handles, same count) hasn't changed between frames, refits
-/// in-place instead of doing a full rebuild — much faster for transform-only updates.
+/// Since we waitUntilCompleted after both the TLAS build and the compute
+/// dispatch, there's no GPU/CPU overlap — a single slot suffices.
+/// Rebuilt every frame (matching the ObjC Metal backend).
 pub struct TlasState {
-    tlas: [Option<GpuAccelStructure>; 2],
-    scratch: [Option<Retained<ProtocolObject<dyn MTLBuffer>>>; 2],
-    buffer_index: usize,
-    prev_instance_keys: Vec<u32>,
+    pub tlas: [Option<GpuAccelStructure>; 2],
+    pub scratch: [Option<Retained<ProtocolObject<dyn MTLBuffer>>>; 2],
 }
 
 impl TlasState {
@@ -156,60 +154,6 @@ impl TlasState {
         Self {
             tlas: [None, None],
             scratch: [None, None],
-            buffer_index: 0,
-            prev_instance_keys: Vec::new(),
         }
-    }
-
-    /// Get the current TLAS (if built).
-    pub fn current(&self) -> Option<&GpuAccelStructure> {
-        self.tlas[self.buffer_index].as_ref()
-    }
-
-    /// The current buffer index (for double-buffering).
-    pub fn buffer_index(&self) -> usize {
-        self.buffer_index
-    }
-
-    /// Mutable access to the TLAS slots (for migration from existing code).
-    pub fn tlas_slots_mut(
-        &mut self,
-    ) -> (
-        &mut [Option<GpuAccelStructure>; 2],
-        &mut [Option<Retained<ProtocolObject<dyn MTLBuffer>>>; 2],
-        &mut usize,
-        &mut Vec<u32>,
-    ) {
-        (
-            &mut self.tlas,
-            &mut self.scratch,
-            &mut self.buffer_index,
-            &mut self.prev_instance_keys,
-        )
-    }
-
-    /// Check if a refit is possible (same instance keys as last frame).
-    pub fn can_refit(&self, current_keys: &[u32]) -> bool {
-        current_keys.len() == self.prev_instance_keys.len()
-            && current_keys
-                .iter()
-                .zip(self.prev_instance_keys.iter())
-                .all(|(a, b)| a == b)
-            && self.tlas[self.buffer_index].is_some()
-    }
-
-    /// Update the instance keys after a full rebuild.
-    pub fn set_instance_keys(&mut self, keys: Vec<u32>) {
-        self.prev_instance_keys = keys;
-    }
-
-    /// Clear instance keys (e.g., when no instances are present).
-    pub fn clear_instance_keys(&mut self) {
-        self.prev_instance_keys.clear();
-    }
-
-    /// Advance to the next buffer index (for double-buffering on full rebuild).
-    pub fn advance_buffer_index(&mut self) {
-        self.buffer_index = 1 - self.buffer_index;
     }
 }

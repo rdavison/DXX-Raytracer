@@ -175,9 +175,12 @@ fn build_combined_triangle_buffer(
     Some(total_tris as u32)
 }
 
-/// Build or refit the top-level acceleration structure from resolved instances.
-/// When the set of instances (same mesh handles, same count) hasn't changed,
-/// refits in-place instead of doing a full rebuild.
+/// Build the top-level acceleration structure from resolved instances.
+///
+/// Always performs a full rebuild (matching the ObjC Metal backend).
+/// Since we waitUntilCompleted after both the TLAS build and the compute
+/// dispatch, there's no GPU/CPU overlap that would require double-buffering,
+/// so we reuse a single TLAS slot and only reallocate when it's too small.
 fn build_tlas(
     device: &ProtocolObject<dyn MTLDevice>,
     command_queue: &ProtocolObject<dyn MTLCommandQueue>,
@@ -186,11 +189,8 @@ fn build_tlas(
     tlas_state: &mut TlasState,
 ) -> Option<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> {
     if instances.is_empty() {
-        tlas_state.clear_instance_keys();
         return None;
     }
-
-    let (tlas_store, scratch_store, buffer_index, prev_instance_keys) = tlas_state.tlas_slots_mut();
 
     // Collect unique BLAS references and build instance descriptors
     let mut blas_list: Vec<(u32, &ProtocolObject<dyn MTLAccelerationStructure>)> = Vec::new();
@@ -210,15 +210,8 @@ fn build_tlas(
     }
 
     if blas_list.is_empty() {
-        prev_instance_keys.clear();
         return None;
     }
-
-    // Determine if we can refit: same instance keys as last frame
-    let current_keys: Vec<u32> = instances.iter().map(|i| i.mesh_handle.index).collect();
-    let can_refit = current_keys.len() == prev_instance_keys.len()
-        && current_keys.iter().zip(prev_instance_keys.iter()).all(|(a, b)| a == b)
-        && tlas_store[*buffer_index].is_some();
 
     // Create instance descriptor buffer
     let inst_desc_size = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
@@ -271,98 +264,54 @@ fn build_tlas(
         tlas_desc.setInstanceDescriptorBufferOffset(0);
     }
     tlas_desc.setInstancedAccelerationStructures(Some(&blas_ns_array));
-    tlas_desc.setUsage(MTLAccelerationStructureUsage::Refit);
 
-    if can_refit {
-        // Refit in-place: update transforms without rebuilding
-        let idx = *buffer_index;
-        let tlas_accel = tlas_store[idx].as_ref()?;
-        let tlas = tlas_accel.metal_accel();
+    // Full rebuild every frame
+    let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
+    if sizes.accelerationStructureSize == 0 {
+        return None;
+    }
 
-        let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
-        let scratch_size = sizes.refitScratchBufferSize.max(64);
-        let need_scratch = match &scratch_store[idx] {
-            Some(existing) => existing.length() < scratch_size,
-            None => true,
-        };
-        if need_scratch {
-            scratch_store[idx] = device.newBufferWithLength_options(
-                scratch_size,
-                MTLResourceOptions::StorageModePrivate,
-            );
-        }
-        let scratch = scratch_store[idx].as_ref()?;
-
-        let cmd_buf = command_queue.commandBuffer()?;
-        let encoder = cmd_buf.accelerationStructureCommandEncoder()?;
-        unsafe {
-            encoder.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
-                tlas,
-                &tlas_desc,
-                None,
-                Some(scratch),
-                0,
-            );
-        }
-        encoder.endEncoding();
-        cmd_buf.commit();
-        cmd_buf.waitUntilCompleted();
-
-        Some(tlas_accel.clone_retained())
-    } else {
-        // Full rebuild
-        let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
-        if sizes.accelerationStructureSize == 0 {
-            prev_instance_keys.clear();
+    // Reuse slot 0; only reallocate when too small
+    let need_realloc = match &tlas_state.tlas[0] {
+        Some(existing) => existing.size() < sizes.accelerationStructureSize,
+        None => true,
+    };
+    if need_realloc {
+        if let Some(new_accel) = device.newAccelerationStructureWithSize(sizes.accelerationStructureSize) {
+            tlas_state.tlas[0] = Some(crate::gpu::accel::GpuAccelStructure::from_retained(new_accel));
+        } else {
             return None;
         }
-
-        let idx = *buffer_index;
-        *buffer_index = 1 - idx;
-
-        let need_realloc = match &tlas_store[idx] {
-            Some(existing) => existing.size() < sizes.accelerationStructureSize,
-            None => true,
-        };
-        if need_realloc {
-            if let Some(new_accel) = device.newAccelerationStructureWithSize(sizes.accelerationStructureSize) {
-                tlas_store[idx] = Some(crate::gpu::accel::GpuAccelStructure::from_retained(new_accel));
-            } else {
-                return None;
-            }
-        }
-        let tlas_accel = tlas_store[idx].as_ref()?;
-        let tlas = tlas_accel.metal_accel();
-
-        let scratch_size = sizes.buildScratchBufferSize.max(64);
-        let need_scratch = match &scratch_store[idx] {
-            Some(existing) => existing.length() < scratch_size,
-            None => true,
-        };
-        if need_scratch {
-            scratch_store[idx] = device.newBufferWithLength_options(
-                scratch_size,
-                MTLResourceOptions::StorageModePrivate,
-            );
-        }
-        let scratch = scratch_store[idx].as_ref()?;
-
-        let cmd_buf = command_queue.commandBuffer()?;
-        let encoder = cmd_buf.accelerationStructureCommandEncoder()?;
-        encoder.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
-            tlas,
-            &tlas_desc,
-            scratch,
-            0,
-        );
-        encoder.endEncoding();
-        cmd_buf.commit();
-        cmd_buf.waitUntilCompleted();
-
-        *prev_instance_keys = current_keys;
-
-        Some(tlas_accel.clone_retained())
     }
+    let tlas_accel = tlas_state.tlas[0].as_ref()?;
+    let tlas = tlas_accel.metal_accel();
+
+    let scratch_size = sizes.buildScratchBufferSize.max(64);
+    let need_scratch = match &tlas_state.scratch[0] {
+        Some(existing) => existing.length() < scratch_size,
+        None => true,
+    };
+    if need_scratch {
+        tlas_state.scratch[0] = device.newBufferWithLength_options(
+            scratch_size,
+            MTLResourceOptions::StorageModePrivate,
+        );
+    }
+    let scratch = tlas_state.scratch[0].as_ref()?;
+
+    let cmd_buf = command_queue.commandBuffer()?;
+    let encoder = cmd_buf.accelerationStructureCommandEncoder()?;
+    encoder.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
+        tlas,
+        &tlas_desc,
+        scratch,
+        0,
+    );
+    encoder.endEncoding();
+    cmd_buf.commit();
+    cmd_buf.waitUntilCompleted();
+
+    Some(tlas_accel.clone_retained())
 }
 
 /// Ensure the raytrace output texture exists and matches the requested size.
