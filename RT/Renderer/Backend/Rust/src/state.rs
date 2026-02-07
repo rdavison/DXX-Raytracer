@@ -9,7 +9,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLAccelerationStructure, MTLBuffer, MTLCommandQueue, MTLComputePipelineState,
-    MTLDevice, MTLRenderPipelineState, MTLSamplerState, MTLTexture,
+    MTLDevice, MTLRenderPipelineState, MTLResourceOptions, MTLSamplerState, MTLTexture,
 };
 use objc2_quartz_core::CAMetalLayer;
 
@@ -21,6 +21,86 @@ use crate::texture::TextureSlotMap;
 use crate::types::*;
 use crate::types::Light;
 use crate::{RT_MAX_MATERIAL_EDGES, RT_MAX_MATERIALS};
+
+// ============================================================================
+// Pre-allocated frame buffers (avoid per-frame GPU allocations)
+// ============================================================================
+
+pub struct FrameBuffers {
+    pub scene_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub instance_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub instance_capacity: usize,
+    pub combined_tri_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub combined_tri_capacity: usize,
+    pub light_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub light_capacity: usize,
+    pub material_edges_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub material_indices_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub gpu_materials_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub remap_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub remap_capacity: usize,
+    pub remap_size_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+}
+
+impl FrameBuffers {
+    pub fn new() -> Self {
+        Self {
+            scene_buf: None,
+            instance_buf: None,
+            instance_capacity: 0,
+            combined_tri_buf: None,
+            combined_tri_capacity: 0,
+            light_buf: None,
+            light_capacity: 0,
+            material_edges_buf: None,
+            material_indices_buf: None,
+            gpu_materials_buf: None,
+            remap_buf: None,
+            remap_capacity: 0,
+            remap_size_buf: None,
+        }
+    }
+}
+
+/// Ensure a buffer has at least `needed` elements of `element_size` bytes.
+/// If the buffer is too small or doesn't exist, allocates a new one.
+/// Returns a reference to the buffer, or None on allocation failure.
+pub fn ensure_buffer_capacity(
+    device: &ProtocolObject<dyn MTLDevice>,
+    buf: &mut Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    capacity: &mut usize,
+    needed: usize,
+    element_size: usize,
+) -> bool {
+    if *capacity >= needed && buf.is_some() {
+        return true;
+    }
+    let byte_len = needed * element_size;
+    if byte_len == 0 {
+        return false;
+    }
+    *buf = device.newBufferWithLength_options(byte_len, MTLResourceOptions::StorageModeShared);
+    if buf.is_some() {
+        *capacity = needed;
+        true
+    } else {
+        false
+    }
+}
+
+/// Ensure a fixed-size buffer exists (allocate once, never grows).
+/// Returns true if the buffer is available.
+pub fn ensure_fixed_buffer(
+    device: &ProtocolObject<dyn MTLDevice>,
+    buf: &mut Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    byte_len: usize,
+) -> bool {
+    if buf.is_some() {
+        return true;
+    }
+    *buf = device.newBufferWithLength_options(byte_len, MTLResourceOptions::StorageModeShared);
+    buf.is_some()
+}
 
 // ============================================================================
 // Dispatch semaphore FFI (libdispatch)
@@ -101,6 +181,15 @@ pub struct MetalState {
 
     // GPU material data (indexed by material_index, stores albedo texture index + flags)
     pub gpu_materials: Vec<GPUMaterial>,
+
+    // Pre-allocated frame buffers (avoid per-frame GPU allocations)
+    pub frame_buffers: FrameBuffers,
+
+    // Cached raytrace sampler (created once at init)
+    pub raytrace_sampler: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
+
+    // Previous frame's instance keys for TLAS refit detection
+    pub prev_instance_keys: Vec<u32>,
 }
 
 // SAFETY: Renderer is only called from the game's main thread.
@@ -160,6 +249,15 @@ pub fn init(device_state: DeviceState) {
 
         // GPU materials
         gpu_materials: vec![GPUMaterial::default(); RT_MAX_MATERIALS],
+
+        // Pre-allocated frame buffers
+        frame_buffers: FrameBuffers::new(),
+
+        // Cached raytrace sampler (created in RT_RendererInit after pipeline setup)
+        raytrace_sampler: None,
+
+        // TLAS refit tracking
+        prev_instance_keys: Vec::new(),
     };
 
     unsafe {

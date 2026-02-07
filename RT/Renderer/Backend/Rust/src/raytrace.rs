@@ -2,14 +2,12 @@
 //!
 //! Builds combined triangle buffer, TLAS, and dispatches compute shader.
 
-use std::ffi::c_void;
-use std::ptr::NonNull;
-
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::*;
 
 use crate::mesh::MeshSlotMap;
+use crate::state::FrameBuffers;
 use crate::texture::TextureSlotMap;
 use crate::types::*;
 
@@ -103,13 +101,14 @@ pub fn queue_mesh_instance(
 }
 
 /// Build a single combined triangle buffer from all queued instances.
-/// Updates triangle_offset for each instance. Returns (buffer, total_triangle_count).
+/// Uses pre-allocated buffer from FrameBuffers, growing only when needed.
+/// Updates triangle_offset for each instance. Returns total_triangle_count, or None if empty.
 pub fn build_combined_triangle_buffer(
     device: &ProtocolObject<dyn MTLDevice>,
     mesh_slotmap: &MeshSlotMap,
     instances: &mut [PendingInstance],
-) -> Option<(Retained<ProtocolObject<dyn MTLBuffer>>, u32)> {
-    // Calculate total size
+    frame_buffers: &mut FrameBuffers,
+) -> Option<u32> {
     let tri_size = std::mem::size_of::<Triangle>();
     let mut total_tris: usize = 0;
     for inst in instances.iter() {
@@ -122,13 +121,18 @@ pub fn build_combined_triangle_buffer(
         return None;
     }
 
-    let total_bytes = total_tris * tri_size;
-    let combined = device.newBufferWithLength_options(
-        total_bytes,
-        MTLResourceOptions::StorageModeShared,
-    )?;
+    // Ensure buffer is large enough
+    if !crate::state::ensure_buffer_capacity(
+        device,
+        &mut frame_buffers.combined_tri_buf,
+        &mut frame_buffers.combined_tri_capacity,
+        total_tris,
+        tri_size,
+    ) {
+        return None;
+    }
 
-    // Copy triangle data and set offsets
+    let combined = frame_buffers.combined_tri_buf.as_ref().unwrap();
     let dst_base = combined.contents().as_ptr() as *mut u8;
     let mut offset: usize = 0;
 
@@ -137,7 +141,6 @@ pub fn build_combined_triangle_buffer(
             let byte_count = mesh.triangle_count * tri_size;
             inst.instance.triangle_offset = (offset / tri_size) as u32;
 
-            // Copy from mesh's triangle buffer
             let src = mesh.triangle_buffer.contents().as_ptr() as *const u8;
             unsafe {
                 std::ptr::copy_nonoverlapping(src, dst_base.add(offset), byte_count);
@@ -146,10 +149,12 @@ pub fn build_combined_triangle_buffer(
         }
     }
 
-    Some((combined, total_tris as u32))
+    Some(total_tris as u32)
 }
 
-/// Build the top-level acceleration structure from queued instances.
+/// Build or refit the top-level acceleration structure from queued instances.
+/// When the set of instances (same mesh handles, same count) hasn't changed,
+/// refits in-place instead of doing a full rebuild — much faster for transform-only updates.
 pub fn build_tlas(
     device: &ProtocolObject<dyn MTLDevice>,
     command_queue: &ProtocolObject<dyn MTLCommandQueue>,
@@ -158,13 +163,14 @@ pub fn build_tlas(
     tlas_store: &mut [Option<Retained<ProtocolObject<dyn MTLAccelerationStructure>>>; 2],
     scratch_store: &mut [Option<Retained<ProtocolObject<dyn MTLBuffer>>>; 2],
     buffer_index: &mut usize,
+    prev_instance_keys: &mut Vec<u32>,
 ) -> Option<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> {
     if instances.is_empty() {
+        prev_instance_keys.clear();
         return None;
     }
 
     // Collect unique BLAS references and build instance descriptors
-    // Map: mesh_handle.index -> (blas_index, &BLAS)
     let mut blas_list: Vec<(u32, &ProtocolObject<dyn MTLAccelerationStructure>)> = Vec::new();
     let mut blas_index_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
 
@@ -182,8 +188,15 @@ pub fn build_tlas(
     }
 
     if blas_list.is_empty() {
+        prev_instance_keys.clear();
         return None;
     }
+
+    // Determine if we can refit: same instance keys as last frame
+    let current_keys: Vec<u32> = instances.iter().map(|i| i.mesh_handle.index).collect();
+    let can_refit = current_keys.len() == prev_instance_keys.len()
+        && current_keys.iter().zip(prev_instance_keys.iter()).all(|(a, b)| a == b)
+        && tlas_store[*buffer_index].is_some();
 
     // Create instance descriptor buffer
     let inst_desc_size = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
@@ -200,8 +213,6 @@ pub fn build_tlas(
             None => continue,
         };
 
-        // Convert row-major Mat4 to Metal's column-major MTLPackedFloat4x3
-        // Metal wants 4 columns, each with 3 rows (x,y,z)
         let m = &inst.instance.object_to_world.e;
         let transform = MTLPackedFloat4x3 {
             columns: [
@@ -239,54 +250,99 @@ pub fn build_tlas(
     }
     tlas_desc.setInstancedAccelerationStructures(Some(&blas_ns_array));
 
-    // Query sizes
-    let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
-    if sizes.accelerationStructureSize == 0 {
-        return None;
-    }
+    // Set Refit usage so the TLAS is built in a refit-compatible layout
+    tlas_desc.setUsage(MTLAccelerationStructureUsage::Refit);
 
-    // Alternate buffer index for double-buffering
-    let idx = *buffer_index;
-    *buffer_index = 1 - idx;
+    if can_refit {
+        // Refit in-place: update transforms without rebuilding
+        let idx = *buffer_index;
+        let tlas = tlas_store[idx].as_ref()?;
 
-    // Allocate/reuse TLAS
-    let need_realloc = match &tlas_store[idx] {
-        Some(existing) => existing.size() < sizes.accelerationStructureSize,
-        None => true,
-    };
-    if need_realloc {
-        tlas_store[idx] = device.newAccelerationStructureWithSize(sizes.accelerationStructureSize);
-    }
-    let tlas = tlas_store[idx].as_ref()?;
+        // Refit needs scratch buffer sized for refit (usually smaller than build)
+        let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
+        let scratch_size = sizes.refitScratchBufferSize.max(64);
+        let need_scratch = match &scratch_store[idx] {
+            Some(existing) => existing.length() < scratch_size,
+            None => true,
+        };
+        if need_scratch {
+            scratch_store[idx] = device.newBufferWithLength_options(
+                scratch_size,
+                MTLResourceOptions::StorageModePrivate,
+            );
+        }
+        let scratch = scratch_store[idx].as_ref()?;
 
-    // Allocate/reuse scratch buffer
-    let scratch_size = sizes.buildScratchBufferSize.max(64);
-    let need_scratch = match &scratch_store[idx] {
-        Some(existing) => existing.length() < scratch_size,
-        None => true,
-    };
-    if need_scratch {
-        scratch_store[idx] = device.newBufferWithLength_options(
-            scratch_size,
-            MTLResourceOptions::StorageModePrivate,
+        let cmd_buf = command_queue.commandBuffer()?;
+        let encoder = cmd_buf.accelerationStructureCommandEncoder()?;
+        unsafe {
+            encoder.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
+                tlas,
+                &tlas_desc,
+                None, // in-place refit
+                Some(scratch),
+                0,
+            );
+        }
+        encoder.endEncoding();
+        cmd_buf.commit();
+        cmd_buf.waitUntilCompleted();
+
+        // Keys unchanged, no need to update prev_instance_keys
+        Some(tlas.clone())
+    } else {
+        // Full rebuild
+        let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
+        if sizes.accelerationStructureSize == 0 {
+            prev_instance_keys.clear();
+            return None;
+        }
+
+        // Alternate buffer index for double-buffering
+        let idx = *buffer_index;
+        *buffer_index = 1 - idx;
+
+        // Allocate/reuse TLAS
+        let need_realloc = match &tlas_store[idx] {
+            Some(existing) => existing.size() < sizes.accelerationStructureSize,
+            None => true,
+        };
+        if need_realloc {
+            tlas_store[idx] = device.newAccelerationStructureWithSize(sizes.accelerationStructureSize);
+        }
+        let tlas = tlas_store[idx].as_ref()?;
+
+        // Allocate/reuse scratch buffer
+        let scratch_size = sizes.buildScratchBufferSize.max(64);
+        let need_scratch = match &scratch_store[idx] {
+            Some(existing) => existing.length() < scratch_size,
+            None => true,
+        };
+        if need_scratch {
+            scratch_store[idx] = device.newBufferWithLength_options(
+                scratch_size,
+                MTLResourceOptions::StorageModePrivate,
+            );
+        }
+        let scratch = scratch_store[idx].as_ref()?;
+
+        let cmd_buf = command_queue.commandBuffer()?;
+        let encoder = cmd_buf.accelerationStructureCommandEncoder()?;
+        encoder.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
+            tlas,
+            &tlas_desc,
+            scratch,
+            0,
         );
+        encoder.endEncoding();
+        cmd_buf.commit();
+        cmd_buf.waitUntilCompleted();
+
+        // Update keys for next frame's refit check
+        *prev_instance_keys = current_keys;
+
+        Some(tlas.clone())
     }
-    let scratch = scratch_store[idx].as_ref()?;
-
-    // Build TLAS
-    let cmd_buf = command_queue.commandBuffer()?;
-    let encoder = cmd_buf.accelerationStructureCommandEncoder()?;
-    encoder.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
-        tlas,
-        &tlas_desc,
-        scratch,
-        0,
-    );
-    encoder.endEncoding();
-    cmd_buf.commit();
-    cmd_buf.waitUntilCompleted();
-
-    Some(tlas.clone())
 }
 
 /// Ensure the raytrace output texture exists and matches the requested size.
@@ -323,6 +379,7 @@ pub fn ensure_output_texture(
 const MAX_ALPHA_TEXTURE_SLOTS: usize = 31;
 
 /// Dispatch the raytracing compute shader.
+/// Uses pre-allocated FrameBuffers to avoid per-frame GPU allocations.
 pub fn dispatch_rays(
     device: &ProtocolObject<dyn MTLDevice>,
     command_queue: &ProtocolObject<dyn MTLCommandQueue>,
@@ -336,24 +393,27 @@ pub fn dispatch_rays(
     tlas_store: &mut [Option<Retained<ProtocolObject<dyn MTLAccelerationStructure>>>; 2],
     scratch_store: &mut [Option<Retained<ProtocolObject<dyn MTLBuffer>>>; 2],
     tlas_buffer_index: &mut usize,
+    prev_instance_keys: &mut Vec<u32>,
     lights: &[Light],
     material_edges: &[MaterialEdge],
     material_indices: &[u16],
     gpu_materials: &[GPUMaterial],
     texture_slotmap: &TextureSlotMap,
     white_texture: Option<&ProtocolObject<dyn MTLTexture>>,
+    frame_buffers: &mut FrameBuffers,
+    raytrace_sampler: Option<&ProtocolObject<dyn MTLSamplerState>>,
 ) {
     if instances.is_empty() {
         return;
     }
 
-    // 1. Build combined triangle buffer
-    let (combined_tri_buf, total_tris) = match build_combined_triangle_buffer(device, mesh_slotmap, instances) {
-        Some(result) => result,
+    // 1. Build combined triangle buffer (pre-allocated)
+    let total_tris = match build_combined_triangle_buffer(device, mesh_slotmap, instances, frame_buffers) {
+        Some(count) => count,
         None => return,
     };
 
-    // 2. Build TLAS
+    // 2. Build/refit TLAS
     let mut use_accel: u32 = 0;
     let tlas = build_tlas(
         device,
@@ -363,23 +423,21 @@ pub fn dispatch_rays(
         tlas_store,
         scratch_store,
         tlas_buffer_index,
+        prev_instance_keys,
     );
     if tlas.is_some() {
         use_accel = 1;
     }
 
     // 3. Build texture remap for alpha cutout triangles
-    // Scan triangles for ALPHA_CUTOUT flag, resolve their textures, assign remap slots
     let rt_triangle_alpha_cutout: u32 = 1 << 29;
     let rt_triangle_mei_mask: u32 = 0x1FFFFFFF;
 
-    // albedo_index -> remap slot (1-based; 0 = no texture)
     let mut remap_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-    // Ordered list of (albedo_index, &MTLTexture) for binding
     let mut remap_textures: Vec<(u32, &ProtocolObject<dyn MTLTexture>)> = Vec::new();
     let mut next_slot: u32 = 1;
 
-    // Read combined triangle data to find cutout triangles
+    let combined_tri_buf = frame_buffers.combined_tri_buf.as_ref().unwrap();
     let combined_ptr = combined_tri_buf.contents().as_ptr() as *const Triangle;
     for i in 0..total_tris as usize {
         let tri = unsafe { &*combined_ptr.add(i) };
@@ -392,9 +450,8 @@ pub fn dispatch_rays(
         }
         let edge = &material_edges[mei];
 
-        // Resolve overlay texture (mat2), fall back to base (mat1)
         let mat2_raw = edge.mat2;
-        let mat2_tex = (mat2_raw & 0x03FF) as usize; // bits 0-9
+        let mat2_tex = (mat2_raw & 0x03FF) as usize;
         let mat1_tex = edge.mat1 as usize;
         let tmap_num = if mat2_tex > 0 { mat2_tex } else { mat1_tex };
 
@@ -410,12 +467,10 @@ pub fn dispatch_rays(
             continue;
         }
 
-        // Check if already remapped
         if remap_map.contains_key(&albedo_idx) {
             continue;
         }
 
-        // Look up actual texture
         if let Some(tex) = texture_slotmap.find_by_index(albedo_idx) {
             if next_slot < MAX_ALPHA_TEXTURE_SLOTS as u32 {
                 remap_map.insert(albedo_idx, next_slot);
@@ -425,8 +480,6 @@ pub fn dispatch_rays(
         }
     }
 
-    // Build remap table: indexed by albedo_index → slot number
-    // We need a buffer large enough for all albedo indices we encountered
     let max_remap_idx = remap_map.keys().copied().max().unwrap_or(0) as usize;
     let remap_table_size = max_remap_idx + 1;
     let mut remap_table: Vec<u32> = vec![0u32; remap_table_size.max(1)];
@@ -458,34 +511,142 @@ pub fn dispatch_rays(
         light_count: lights.len() as u32,
     };
 
-    // Create GPU buffers for scene constants and instance data
-    let scene_buf = unsafe {
-        device.newBufferWithBytes_length_options(
-            NonNull::new_unchecked(&scene as *const RaytraceSceneConstants as *mut c_void),
-            std::mem::size_of::<RaytraceSceneConstants>(),
-            MTLResourceOptions::StorageModeShared,
-        )
-    };
-    let scene_buf = match scene_buf {
-        Some(b) => b,
-        None => return,
-    };
+    // 5. Write data into pre-allocated buffers
 
-    // Instance buffer
+    // Scene constants (fixed size — allocate once)
+    let scene_size = std::mem::size_of::<RaytraceSceneConstants>();
+    if !crate::state::ensure_fixed_buffer(device, &mut frame_buffers.scene_buf, scene_size) {
+        return;
+    }
+    let scene_buf = frame_buffers.scene_buf.as_ref().unwrap();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            &scene as *const RaytraceSceneConstants as *const u8,
+            scene_buf.contents().as_ptr() as *mut u8,
+            scene_size,
+        );
+    }
+
+    // Instance buffer (variable size)
     let instance_data: Vec<RaytraceInstance> = instances.iter().map(|p| p.instance).collect();
-    let inst_buf = unsafe {
-        device.newBufferWithBytes_length_options(
-            NonNull::new_unchecked(instance_data.as_ptr() as *mut c_void),
-            instance_data.len() * std::mem::size_of::<RaytraceInstance>(),
-            MTLResourceOptions::StorageModeShared,
-        )
-    };
-    let inst_buf = match inst_buf {
-        Some(b) => b,
-        None => return,
-    };
+    let inst_size = std::mem::size_of::<RaytraceInstance>();
+    if !crate::state::ensure_buffer_capacity(
+        device,
+        &mut frame_buffers.instance_buf,
+        &mut frame_buffers.instance_capacity,
+        instance_data.len(),
+        inst_size,
+    ) {
+        return;
+    }
+    let inst_buf = frame_buffers.instance_buf.as_ref().unwrap();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            instance_data.as_ptr() as *const u8,
+            inst_buf.contents().as_ptr() as *mut u8,
+            instance_data.len() * inst_size,
+        );
+    }
 
-    // 4. Dispatch compute
+    // Material edges (fixed max size — allocate once)
+    let me_byte_len = material_edges.len() * std::mem::size_of::<MaterialEdge>();
+    if !crate::state::ensure_fixed_buffer(device, &mut frame_buffers.material_edges_buf, me_byte_len) {
+        return;
+    }
+    let me_buf = frame_buffers.material_edges_buf.as_ref().unwrap();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            material_edges.as_ptr() as *const u8,
+            me_buf.contents().as_ptr() as *mut u8,
+            me_byte_len,
+        );
+    }
+
+    // Material indices (fixed max size — allocate once)
+    let mi_byte_len = material_indices.len() * std::mem::size_of::<u16>();
+    if !crate::state::ensure_fixed_buffer(device, &mut frame_buffers.material_indices_buf, mi_byte_len) {
+        return;
+    }
+    let mi_buf = frame_buffers.material_indices_buf.as_ref().unwrap();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            material_indices.as_ptr() as *const u8,
+            mi_buf.contents().as_ptr() as *mut u8,
+            mi_byte_len,
+        );
+    }
+
+    // GPU materials (fixed max size — allocate once)
+    let gm_byte_len = gpu_materials.len() * std::mem::size_of::<GPUMaterial>();
+    if !crate::state::ensure_fixed_buffer(device, &mut frame_buffers.gpu_materials_buf, gm_byte_len) {
+        return;
+    }
+    let gm_buf = frame_buffers.gpu_materials_buf.as_ref().unwrap();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            gpu_materials.as_ptr() as *const u8,
+            gm_buf.contents().as_ptr() as *mut u8,
+            gm_byte_len,
+        );
+    }
+
+    // Light buffer (variable size)
+    if !lights.is_empty() {
+        let light_elem_size = std::mem::size_of::<Light>();
+        if !crate::state::ensure_buffer_capacity(
+            device,
+            &mut frame_buffers.light_buf,
+            &mut frame_buffers.light_capacity,
+            lights.len(),
+            light_elem_size,
+        ) {
+            return;
+        }
+        let light_buf = frame_buffers.light_buf.as_ref().unwrap();
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                lights.as_ptr() as *const u8,
+                light_buf.contents().as_ptr() as *mut u8,
+                lights.len() * light_elem_size,
+            );
+        }
+    }
+
+    // Remap table (variable size)
+    let remap_elem_size = std::mem::size_of::<u32>();
+    if !crate::state::ensure_buffer_capacity(
+        device,
+        &mut frame_buffers.remap_buf,
+        &mut frame_buffers.remap_capacity,
+        remap_table.len(),
+        remap_elem_size,
+    ) {
+        return;
+    }
+    let remap_buf = frame_buffers.remap_buf.as_ref().unwrap();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            remap_table.as_ptr() as *const u8,
+            remap_buf.contents().as_ptr() as *mut u8,
+            remap_table.len() * remap_elem_size,
+        );
+    }
+
+    // Remap size (fixed 4 bytes — allocate once)
+    if !crate::state::ensure_fixed_buffer(device, &mut frame_buffers.remap_size_buf, std::mem::size_of::<u32>()) {
+        return;
+    }
+    let rs_buf = frame_buffers.remap_size_buf.as_ref().unwrap();
+    let remap_size = remap_table.len() as u32;
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            &remap_size as *const u32 as *const u8,
+            rs_buf.contents().as_ptr() as *mut u8,
+            std::mem::size_of::<u32>(),
+        );
+    }
+
+    // 6. Dispatch compute
     let cmd_buf = match command_queue.commandBuffer() {
         Some(b) => b,
         None => return,
@@ -501,9 +662,9 @@ pub fn dispatch_rays(
         encoder.setTexture_atIndex(Some(output_texture), 0);
     }
     unsafe {
-        encoder.setBuffer_offset_atIndex(Some(&scene_buf), 0, 0);
-        encoder.setBuffer_offset_atIndex(Some(&inst_buf), 0, 1);
-        encoder.setBuffer_offset_atIndex(Some(&combined_tri_buf), 0, 2);
+        encoder.setBuffer_offset_atIndex(Some(scene_buf), 0, 0);
+        encoder.setBuffer_offset_atIndex(Some(inst_buf), 0, 1);
+        encoder.setBuffer_offset_atIndex(Some(combined_tri_buf), 0, 2);
     }
 
     // Bind TLAS at buffer index 8
@@ -515,115 +676,46 @@ pub fn dispatch_rays(
 
     // Bind light buffer at index 9
     if !lights.is_empty() {
-        let light_buf = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(lights.as_ptr() as *mut c_void),
-                lights.len() * std::mem::size_of::<Light>(),
-                MTLResourceOptions::StorageModeShared,
-            )
-        };
-        if let Some(ref buf) = light_buf {
+        if let Some(ref buf) = frame_buffers.light_buf {
             unsafe {
                 encoder.setBuffer_offset_atIndex(Some(buf), 0, 9);
             }
         }
     }
 
-    // Bind material edges buffer at index 5
-    if !material_edges.is_empty() {
-        let me_buf = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(material_edges.as_ptr() as *mut c_void),
-                material_edges.len() * std::mem::size_of::<MaterialEdge>(),
-                MTLResourceOptions::StorageModeShared,
-            )
-        };
-        if let Some(ref buf) = me_buf {
-            unsafe {
-                encoder.setBuffer_offset_atIndex(Some(buf), 0, 5);
-            }
+    // Bind material edges at index 5
+    unsafe {
+        encoder.setBuffer_offset_atIndex(Some(me_buf), 0, 5);
+    }
+
+    // Bind material indices at index 6
+    unsafe {
+        encoder.setBuffer_offset_atIndex(Some(mi_buf), 0, 6);
+    }
+
+    // Bind gpu_materials at index 7
+    unsafe {
+        encoder.setBuffer_offset_atIndex(Some(gm_buf), 0, 7);
+    }
+
+    // Bind remap table at index 11
+    unsafe {
+        encoder.setBuffer_offset_atIndex(Some(remap_buf), 0, 11);
+    }
+
+    // Bind remap size at index 12
+    unsafe {
+        encoder.setBuffer_offset_atIndex(Some(rs_buf), 0, 12);
+    }
+
+    // Bind cached sampler
+    if let Some(sampler) = raytrace_sampler {
+        unsafe {
+            encoder.setSamplerState_atIndex(Some(sampler), 0);
         }
     }
 
-    // Bind material_indices buffer at index 6 (packed u16 pairs)
-    if !material_indices.is_empty() {
-        let mi_buf = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(material_indices.as_ptr() as *mut c_void),
-                material_indices.len() * std::mem::size_of::<u16>(),
-                MTLResourceOptions::StorageModeShared,
-            )
-        };
-        if let Some(ref buf) = mi_buf {
-            unsafe {
-                encoder.setBuffer_offset_atIndex(Some(buf), 0, 6);
-            }
-        }
-    }
-
-    // Bind gpu_materials buffer at index 7
-    if !gpu_materials.is_empty() {
-        let gm_buf = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(gpu_materials.as_ptr() as *mut c_void),
-                gpu_materials.len() * std::mem::size_of::<GPUMaterial>(),
-                MTLResourceOptions::StorageModeShared,
-            )
-        };
-        if let Some(ref buf) = gm_buf {
-            unsafe {
-                encoder.setBuffer_offset_atIndex(Some(buf), 0, 7);
-            }
-        }
-    }
-
-    // Bind texture remap table at index 11
-    {
-        let remap_buf = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(remap_table.as_ptr() as *mut c_void),
-                remap_table.len() * std::mem::size_of::<u32>(),
-                MTLResourceOptions::StorageModeShared,
-            )
-        };
-        if let Some(ref buf) = remap_buf {
-            unsafe {
-                encoder.setBuffer_offset_atIndex(Some(buf), 0, 11);
-            }
-        }
-
-        // Bind remap table size at index 12 (so shader knows bounds)
-        let remap_size = remap_table.len() as u32;
-        let rs_buf = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(&remap_size as *const u32 as *mut c_void),
-                std::mem::size_of::<u32>(),
-                MTLResourceOptions::StorageModeShared,
-            )
-        };
-        if let Some(ref buf) = rs_buf {
-            unsafe {
-                encoder.setBuffer_offset_atIndex(Some(buf), 0, 12);
-            }
-        }
-    }
-
-    // Bind sampler for texture sampling
-    {
-        let sampler_desc = MTLSamplerDescriptor::new();
-        sampler_desc.setMinFilter(MTLSamplerMinMagFilter::Linear);
-        sampler_desc.setMagFilter(MTLSamplerMinMagFilter::Linear);
-        sampler_desc.setSAddressMode(MTLSamplerAddressMode::Repeat);
-        sampler_desc.setTAddressMode(MTLSamplerAddressMode::Repeat);
-        if let Some(sampler) = device.newSamplerStateWithDescriptor(&sampler_desc) {
-            unsafe {
-                encoder.setSamplerState_atIndex(Some(&sampler), 0);
-            }
-        }
-    }
-
-    // Bind alpha cutout textures: slot 0 = white fallback at texture index 16,
-    // slots 1-30 = remapped textures at texture indices 17-46
+    // Bind alpha cutout textures
     if let Some(white_tex) = white_texture {
         unsafe {
             encoder.setTexture_atIndex(Some(white_tex), 16);

@@ -22,8 +22,8 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDevice,
     MTLDrawable, MTLLibrary, MTLLoadAction, MTLPrimitiveType, MTLRenderCommandEncoder,
-    MTLRenderPassDescriptor, MTLResourceOptions,
-    MTLStoreAction, MTLTexture, MTLViewport,
+    MTLRenderPassDescriptor, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
+    MTLSamplerMinMagFilter, MTLStoreAction, MTLTexture, MTLViewport,
 };
 use objc2_quartz_core::CAMetalDrawable;
 
@@ -89,6 +89,17 @@ pub extern "C" fn RT_RendererInit(params: *const RendererInitParams) {
         }
     } else {
         eprintln!("[Rust Metal] ERROR: raytrace_main function not found in library");
+    }
+
+    // Create cached raytrace sampler (reused every frame)
+    {
+        let sampler_desc = MTLSamplerDescriptor::new();
+        sampler_desc.setMinFilter(MTLSamplerMinMagFilter::Linear);
+        sampler_desc.setMagFilter(MTLSamplerMinMagFilter::Linear);
+        sampler_desc.setSAddressMode(MTLSamplerAddressMode::Repeat);
+        sampler_desc.setTAddressMode(MTLSamplerAddressMode::Repeat);
+        s.raytrace_sampler = s.device.newSamplerStateWithDescriptor(&sampler_desc);
+        eprintln!("[Rust Metal] Raytrace sampler created");
     }
 
     eprintln!("[Rust Metal] Initialization complete");
@@ -649,12 +660,15 @@ pub extern "C" fn RT_RaytraceRender() {
         &mut s.tlas,
         &mut s.tlas_scratch,
         &mut s.tlas_buffer_index,
+        &mut s.prev_instance_keys,
         &lights,
         &s.material_edges,
         &s.material_indices,
         &s.gpu_materials,
         &s.texture_slotmap,
         s.white_texture.as_deref(),
+        &mut s.frame_buffers,
+        s.raytrace_sampler.as_deref(),
     );
 
     if s.frame_index % 120 == 0 {

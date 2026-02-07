@@ -169,7 +169,8 @@ pub fn upload_mesh(
     })
 }
 
-/// Build a bottom-level acceleration structure from a position buffer.
+/// Build a bottom-level acceleration structure from a position buffer, then compact it.
+/// Compaction reduces memory footprint and improves ray traversal performance.
 fn build_blas(
     device: &ProtocolObject<dyn MTLDevice>,
     command_queue: &ProtocolObject<dyn MTLCommandQueue>,
@@ -187,11 +188,7 @@ fn build_blas(
     // Create primitive acceleration structure descriptor
     let prim_desc = MTLPrimitiveAccelerationStructureDescriptor::descriptor();
 
-    // Create NSArray of geometry descriptors
-    // MTLAccelerationStructureTriangleGeometryDescriptor inherits from
-    // MTLAccelerationStructureGeometryDescriptor, so we need to cast
     let geo_descs: Retained<objc2_foundation::NSArray<MTLAccelerationStructureGeometryDescriptor>> = unsafe {
-        // Cast the triangle geometry descriptor to the base class array
         let raw_ptr: *const MTLAccelerationStructureTriangleGeometryDescriptor = &*geo_desc;
         let base_ptr: *const MTLAccelerationStructureGeometryDescriptor = raw_ptr.cast();
         objc2_foundation::NSArray::from_slice(&[&*base_ptr])
@@ -206,7 +203,7 @@ fn build_blas(
         return None;
     }
 
-    // Allocate acceleration structure
+    // Allocate uncompacted acceleration structure
     let blas = device.newAccelerationStructureWithSize(sizes.accelerationStructureSize)?;
 
     // Create scratch buffer
@@ -216,7 +213,7 @@ fn build_blas(
         MTLResourceOptions::StorageModePrivate,
     )?;
 
-    // Build via command encoder
+    // Build BLAS
     let cmd_buf = command_queue.commandBuffer()?;
     let encoder = cmd_buf.accelerationStructureCommandEncoder()?;
     encoder.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
@@ -229,5 +226,43 @@ fn build_blas(
     cmd_buf.commit();
     cmd_buf.waitUntilCompleted();
 
-    Some(blas)
+    // Compact the BLAS: query compacted size, allocate smaller structure, copy+compact
+    let compacted_size_buf = device.newBufferWithLength_options(
+        std::mem::size_of::<u32>(),
+        MTLResourceOptions::StorageModeShared,
+    )?;
+
+    let cmd_buf2 = command_queue.commandBuffer()?;
+    let encoder2 = cmd_buf2.accelerationStructureCommandEncoder()?;
+    encoder2.writeCompactedAccelerationStructureSize_toBuffer_offset(&blas, &compacted_size_buf, 0);
+    encoder2.endEncoding();
+    cmd_buf2.commit();
+    cmd_buf2.waitUntilCompleted();
+
+    let compacted_size = unsafe {
+        *(compacted_size_buf.contents().as_ptr() as *const u32) as usize
+    };
+
+    if compacted_size == 0 || compacted_size >= sizes.accelerationStructureSize {
+        // Compaction wouldn't help or failed — return uncompacted
+        return Some(blas);
+    }
+
+    let compacted_blas = device.newAccelerationStructureWithSize(compacted_size)?;
+
+    let cmd_buf3 = command_queue.commandBuffer()?;
+    let encoder3 = cmd_buf3.accelerationStructureCommandEncoder()?;
+    encoder3.copyAndCompactAccelerationStructure_toAccelerationStructure(&blas, &compacted_blas);
+    encoder3.endEncoding();
+    cmd_buf3.commit();
+    cmd_buf3.waitUntilCompleted();
+
+    eprintln!(
+        "[Rust Metal] BLAS compacted: {} -> {} bytes ({:.0}% reduction)",
+        sizes.accelerationStructureSize,
+        compacted_size,
+        (1.0 - compacted_size as f64 / sizes.accelerationStructureSize as f64) * 100.0
+    );
+
+    Some(compacted_blas)
 }
