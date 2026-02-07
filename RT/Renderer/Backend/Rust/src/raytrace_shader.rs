@@ -96,6 +96,21 @@ struct GPUMaterial {
     uint _pad;
 };
 
+// Bindless texture array via Metal Argument Buffer (Tier 2)
+constant uint RT_MAX_TEXTURES = 6030;
+
+struct TextureArray {
+    array<texture2d<float>, 6030> textures [[id(0)]];
+};
+
+// Sample a texture from the bindless array by index
+float4 sample_bindless(uint tex_idx, float2 uv,
+                       constant TextureArray& tex_array,
+                       sampler tex_sampler) {
+    if (tex_idx == 0 || tex_idx >= RT_MAX_TEXTURES) return float4(0);
+    return tex_array.textures[tex_idx].sample(tex_sampler, uv);
+}
+
 // Look up a u16 material index from the packed u16 array
 uint get_material_index(uint tmap_num, constant ushort* material_indices) {
     return uint(material_indices[tmap_num]);
@@ -474,9 +489,10 @@ kernel void raytrace_main(
     constant Triangle* triangles [[buffer(2)]],
     constant uint* material_edges [[buffer(5)]],
     constant ushort* material_indices [[buffer(6)]],
-    constant GPUMaterial* gpu_materials [[buffer(7)]],
+    constant TextureArray& tex_array [[buffer(7)]],
     instance_acceleration_structure accel_struct [[buffer(8)]],
     constant Light* lights [[buffer(9)]],
+    constant GPUMaterial* gpu_materials [[buffer(10)]],
     constant uint* texture_remap [[buffer(11)]],
     constant uint& remap_table_size [[buffer(12)]],
     constant uint* tile_light_data [[buffer(13)]],
@@ -612,6 +628,41 @@ kernel void raytrace_main(
             float4 vert_color = decode_color(tri.color);
             float4 inst_color = decode_color(inst.color);
             float3 albedo = (vert_color * inst_color).rgb;
+
+            // Interpolate UV at hit point for texture sampling
+            float2 solid_uv = float2(tri.uv0) * w0 + float2(tri.uv1) * hit_bary.x + float2(tri.uv2) * hit_bary.y;
+
+            // Sample base texture and overlay via bindless texture array
+            if (tri.material_edge_index != RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
+                uint mei_raw = tri.material_edge_index;
+                uint mei = mei_raw & RT_TRIANGLE_MEI_MASK;
+                uint edge = material_edges[mei];
+                uint mat1_tex = edge & 0xFFFFu;
+                uint mat2_raw = (edge >> 16) & 0xFFFFu;
+                uint mat2_tex = mat2_raw & 0x03FFu;
+                uint orientation = (mat2_raw & RT_MAT2_ORIENT_MASK) >> RT_MAT2_ORIENT_SHIFT;
+
+                // Sample base texture (mat1_tex=0 is valid — it's tmap_num 0)
+                {
+                    uint mat_slot = get_material_index(mat1_tex, material_indices);
+                    uint base_tex = gpu_materials[mat_slot].albedo_index;
+                    float4 base_sample = sample_bindless(base_tex, solid_uv, tex_array, tex_sampler);
+                    if (base_sample.a > 0.0) {
+                        albedo = base_sample.rgb * inst_color.rgb;
+                    }
+                }
+
+                // Overlay texture (layered on top)
+                if (mat2_tex > 0u) {
+                    uint mat2_slot = get_material_index(mat2_tex, material_indices);
+                    uint overlay_tex = gpu_materials[mat2_slot].albedo_index;
+                    float2 overlay_uv = (orientation > 0u) ? rotate_uv(solid_uv, orientation) : solid_uv;
+                    float4 overlay_sample = sample_bindless(overlay_tex, overlay_uv, tex_array, tex_sampler);
+                    if (overlay_sample.a >= 0.5) {
+                        albedo = overlay_sample.rgb * inst_color.rgb;
+                    }
+                }
+            }
 
             float3 total_light = float3(0.0);
 

@@ -95,6 +95,15 @@ impl TextureSlotMap {
         Some(&slot.texture)
     }
 
+    /// Iterate over all active (index, texture) pairs.
+    pub fn for_each_active<F: FnMut(u32, &ProtocolObject<dyn MTLTexture>)>(&self, mut f: F) {
+        for (i, slot) in self.slots.iter().enumerate().skip(1) {
+            if let Some(s) = slot {
+                f(i as u32, &s.texture);
+            }
+        }
+    }
+
     /// Remove a texture by handle.
     pub fn remove(&mut self, handle: ResourceHandle) {
         if let Some(slot) = self.slots.get_mut(handle.index as usize) {

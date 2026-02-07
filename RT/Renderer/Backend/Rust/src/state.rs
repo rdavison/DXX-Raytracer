@@ -8,7 +8,7 @@ use std::ffi::c_void;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer, MTLCommandQueue, MTLComputePipelineState,
+    MTLArgumentEncoder, MTLBuffer, MTLCommandQueue, MTLComputePipelineState,
     MTLDevice, MTLRenderPipelineState, MTLResourceOptions, MTLSamplerState, MTLTexture,
 };
 use objc2_quartz_core::CAMetalLayer;
@@ -195,6 +195,10 @@ pub struct MetalState {
     // Billboard quad mesh (unit quad, created once at init).
     // `Some` guarantees the mesh exists in the slotmap.
     pub billboard_mesh: Option<MeshHandle>,
+
+    // Bindless texture argument buffer (Tier 2)
+    pub arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
+    pub arg_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
 
 // SAFETY: Renderer is only called from the game's main thread.
@@ -262,6 +266,10 @@ pub fn init(device_state: DeviceState) {
 
         // Billboard quad mesh (created after compute pipeline in RT_RendererInit)
         billboard_mesh: None,
+
+        // Bindless texture argument buffer (created in RT_RendererInit after white texture)
+        arg_encoder: None,
+        arg_buffer: None,
     };
 
     unsafe {

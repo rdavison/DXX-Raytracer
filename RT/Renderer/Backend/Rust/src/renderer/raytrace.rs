@@ -367,6 +367,7 @@ pub fn dispatch(
     white_texture: Option<&ProtocolObject<dyn MTLTexture>>,
     frame_buffers: &mut FrameBuffers,
     raytrace_sampler: Option<&ProtocolObject<dyn MTLSamplerState>>,
+    arg_buffer: Option<&ProtocolObject<dyn MTLBuffer>>,
 ) {
     if instances.is_empty() {
         return;
@@ -425,6 +426,7 @@ pub fn dispatch(
             td.slots_used, super::texture_remap::MAX_ALPHA_TEXTURE_SLOTS,
         );
     }
+
 
     // 5. Fill scene constants
     let vfov_rad = camera.vfov * std::f32::consts::PI / 180.0;
@@ -689,9 +691,30 @@ pub fn dispatch(
         encoder.setBuffer_offset_atIndex(Some(mi_buf), 0, 6);
     }
 
-    // Bind gpu_materials at index 7
+    // Bind gpu_materials at index 10
     unsafe {
-        encoder.setBuffer_offset_atIndex(Some(gm_buf), 0, 7);
+        encoder.setBuffer_offset_atIndex(Some(gm_buf), 0, 10);
+    }
+
+    // Bind argument buffer (bindless textures) at index 7
+    if let Some(ab) = arg_buffer {
+        unsafe {
+            encoder.setBuffer_offset_atIndex(Some(ab), 0, 7);
+        }
+        // Make all active textures GPU-resident
+        texture_slotmap.for_each_active(|_idx, tex| {
+            let resource: &ProtocolObject<dyn MTLResource> = ProtocolObject::from_ref(tex);
+            unsafe {
+                encoder.useResource_usage(resource, MTLResourceUsage::Read);
+            }
+        });
+        // Also make white texture resident (fallback slots reference it)
+        if let Some(wt) = white_texture {
+            let resource: &ProtocolObject<dyn MTLResource> = ProtocolObject::from_ref(wt);
+            unsafe {
+                encoder.useResource_usage(resource, MTLResourceUsage::Read);
+            }
+        }
     }
 
     // Bind remap table at index 11

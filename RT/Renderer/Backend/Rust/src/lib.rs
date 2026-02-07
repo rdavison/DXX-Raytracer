@@ -21,10 +21,11 @@ use std::ptr::NonNull;
 
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDevice,
+    MTLArgumentDescriptor, MTLArgumentEncoder, MTLBindingAccess, MTLClearColor,
+    MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDataType, MTLDevice,
     MTLDrawable, MTLLibrary, MTLLoadAction, MTLPrimitiveType, MTLRenderCommandEncoder,
     MTLRenderPassDescriptor, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
-    MTLSamplerMinMagFilter, MTLStoreAction, MTLTexture, MTLViewport,
+    MTLSamplerMinMagFilter, MTLStoreAction, MTLTexture, MTLTextureType, MTLViewport,
 };
 use objc2_quartz_core::CAMetalDrawable;
 
@@ -45,6 +46,7 @@ const RT_MAX_BITMAP_FILES: usize = 1800;
 const RT_MAX_OBJ_BITMAPS: usize = 210;
 const RT_EXTRA_BITMAP_COUNT: usize = 100;
 const RT_MAX_MATERIALS: usize = RT_MAX_BITMAP_FILES + RT_MAX_OBJ_BITMAPS + RT_EXTRA_BITMAP_COUNT;
+const RT_MAX_TEXTURES: usize = 3 * 2010; // 6030, matching Renderer.h
 
 // ============================================================================
 // Initialization & Lifecycle
@@ -76,6 +78,47 @@ pub extern "C" fn RT_RendererInit(params: *const RendererInitParams) {
     // Also create a slotmap entry so RT_GetDefaultWhiteTexture can return a handle
     let white_tex_copy = texture::create_white_texture(&s.device);
     s.white_texture_handle = s.texture_slotmap.insert(white_tex_copy);
+
+    // Create bindless texture argument buffer (Tier 2)
+    {
+        let desc = MTLArgumentDescriptor::argumentDescriptor();
+        desc.setDataType(MTLDataType::Texture);
+        desc.setIndex(0);
+        desc.setArrayLength(RT_MAX_TEXTURES);
+        desc.setAccess(MTLBindingAccess::ReadOnly);
+        desc.setTextureType(MTLTextureType::Type2D);
+
+        let args = objc2_foundation::NSArray::from_slice(&[&*desc]);
+        if let Some(encoder) = s.device.newArgumentEncoderWithArguments(&args) {
+            let buf_size = encoder.encodedLength();
+            if let Some(buf) = s.device.newBufferWithLength_options(
+                buf_size,
+                MTLResourceOptions::StorageModeShared,
+            ) {
+                // Initialize all slots to white fallback texture
+                unsafe {
+                    encoder.setArgumentBuffer_offset(Some(&buf), 0);
+                }
+                if let Some(white_tex) = s.white_texture.as_ref() {
+                    for i in 0..RT_MAX_TEXTURES {
+                        unsafe {
+                            encoder.setTexture_atIndex(Some(white_tex), i);
+                        }
+                    }
+                }
+                eprintln!(
+                    "[Rust Metal] Argument buffer created: {} bytes for {} textures",
+                    buf_size, RT_MAX_TEXTURES
+                );
+                s.arg_encoder = Some(encoder);
+                s.arg_buffer = Some(buf);
+            } else {
+                eprintln!("[Rust Metal] WARNING: Failed to create argument buffer");
+            }
+        } else {
+            eprintln!("[Rust Metal] WARNING: Failed to create argument encoder");
+        }
+    }
 
     // Phase 3A: Compile raytrace shader and create compute pipeline
     let rt_library = raytrace_shader::compile_raytrace_library(&s.device);
@@ -462,7 +505,21 @@ pub extern "C" fn RT_UploadTexture(params: *const UploadTextureParams) -> Resour
     }
     let params = unsafe { &*params };
     let s = state::get();
-    texture::upload_texture(&s.device, &mut s.texture_slotmap, params)
+    let handle = texture::upload_texture(&s.device, &mut s.texture_slotmap, params);
+
+    // Update argument buffer with the new texture
+    if handle.is_valid() && (handle.index as usize) < RT_MAX_TEXTURES {
+        if let (Some(enc), Some(buf)) = (s.arg_encoder.as_ref(), s.arg_buffer.as_ref()) {
+            if let Some(tex) = s.texture_slotmap.find(handle) {
+                unsafe {
+                    enc.setArgumentBuffer_offset(Some(buf), 0);
+                    enc.setTexture_atIndex(Some(tex), handle.index as usize);
+                }
+            }
+        }
+    }
+
+    handle
 }
 
 #[no_mangle]
@@ -482,6 +539,7 @@ pub extern "C" fn RT_UpdateMaterial(material_index: u16, material: *const Materi
         } else {
             0
         };
+
     }
     material_index
 }
@@ -508,7 +566,19 @@ pub extern "C" fn RT_UploadMesh(params: *const UploadMeshParams) -> ResourceHand
 #[no_mangle]
 pub extern "C" fn RT_ReleaseTexture(handle: ResourceHandle) {
     if handle.is_valid() {
-        state::get().texture_slotmap.remove(handle);
+        let s = state::get();
+
+        // Reset argument buffer slot to white texture before removing
+        if (handle.index as usize) < RT_MAX_TEXTURES {
+            if let (Some(enc), Some(buf)) = (s.arg_encoder.as_ref(), s.arg_buffer.as_ref()) {
+                unsafe {
+                    enc.setArgumentBuffer_offset(Some(buf), 0);
+                    enc.setTexture_atIndex(s.white_texture.as_deref(), handle.index as usize);
+                }
+            }
+        }
+
+        s.texture_slotmap.remove(handle);
     }
 }
 
@@ -802,6 +872,7 @@ pub extern "C" fn RT_RaytraceRender() {
         s.white_texture.as_deref(),
         &mut s.frame_buffers,
         s.raytrace_sampler.as_deref(),
+        s.arg_buffer.as_deref(),
     );
 
     if s.frame_index % 120 == 0 {
