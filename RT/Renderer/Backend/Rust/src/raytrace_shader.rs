@@ -166,31 +166,6 @@ bool should_skip_cutout(
     return alpha < 0.1;
 }
 
-// Check if a ray should skip this triangle (billboard/rod with transparent pixel).
-// Returns true if the ray should pass through.
-bool should_skip_material_override(
-    uint mei_raw,
-    float2 hit_uv,
-    uint material_override_val,
-    constant GPUMaterial* gpu_materials,
-    constant uint* texture_remap,
-    constant uint& remap_table_size,
-    array<texture2d<float, access::sample>, 32> alpha_textures,
-    sampler tex_sampler)
-{
-    if (mei_raw != RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) return false;
-    if (material_override_val == 0u) return false;
-
-    uint albedo_idx = gpu_materials[material_override_val].albedo_index;
-    if (albedo_idx == 0u || albedo_idx >= remap_table_size) return false;
-
-    uint slot = texture_remap[albedo_idx];
-    if (slot == 0u) return false;
-
-    float4 sampled = alpha_textures[slot].sample(tex_sampler, hit_uv);
-    return sampled.a < 0.1;
-}
-
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -343,6 +318,10 @@ kernel void raytrace_main(
         float2 hit_bary;
         float hit_dist_total = 0.0;
 
+        // Accumulated translucent billboard color (composited during bounce loop)
+        float3 accum_color = float3(0.0);
+        float accum_alpha = 0.0;
+
         for (int bounce = 0; bounce < 8; bounce++) {
             intersector<triangle_data, instancing> isect;
             isect.assume_geometry_type(geometry_type::triangle);
@@ -366,20 +345,44 @@ kernel void raytrace_main(
             if (should_skip_cutout(tri.material_edge_index, hit_uv,
                     material_edges, material_indices, gpu_materials,
                     texture_remap, remap_table_size, alpha_textures, tex_sampler)) {
-                // Advance ray past this transparent surface
                 r.origin = r.origin + r.direction * (intersection.distance + 0.002);
                 continue;
             }
 
-            // Skip transparent pixels on billboard/rod overrides
-            if (should_skip_material_override(tri.material_edge_index, hit_uv,
-                    inst.material_override, gpu_materials,
-                    texture_remap, remap_table_size, alpha_textures, tex_sampler)) {
+            // Billboard/rod: composite translucent color, continue ray through
+            if (tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
+                float4 bb_inst_color = decode_color(inst.color);
+                float bb_alpha = 1.0;
+                float3 bb_color = decode_color(tri.color).rgb * bb_inst_color.rgb;
+
+                if (inst.material_override > 0u) {
+                    uint albedo_idx = gpu_materials[inst.material_override].albedo_index;
+                    if (albedo_idx > 0u && albedo_idx < remap_table_size) {
+                        uint slot = texture_remap[albedo_idx];
+                        if (slot > 0u) {
+                            float4 sampled = alpha_textures[slot].sample(tex_sampler, hit_uv);
+                            bb_alpha = sampled.a;
+                            bb_color = sampled.rgb * bb_inst_color.rgb;
+                        }
+                    }
+                }
+
+                if (bb_alpha < 0.1) {
+                    r.origin = r.origin + r.direction * (intersection.distance + 0.002);
+                    continue;
+                }
+
+                float remaining = 1.0 - accum_alpha;
+                accum_color += bb_color * bb_alpha * remaining;
+                accum_alpha += bb_alpha * remaining;
+
+                if (accum_alpha > 0.99) break;
+
                 r.origin = r.origin + r.direction * (intersection.distance + 0.002);
                 continue;
             }
 
-            // Solid hit
+            // Solid hit (non-billboard geometry)
             hit_inst_id = inst_id;
             hit_prim_id = prim_id;
             hit_bary = intersection.triangle_barycentric_coord;
@@ -416,26 +419,6 @@ kernel void raytrace_main(
             float4 inst_color = decode_color(inst.color);
             float3 albedo = (vert_color * inst_color).rgb;
 
-            // Billboard/rod overrides are emissive (self-lit, no lighting)
-            if (tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
-                // Interpolate UV at hit point
-                float2 uv = float2(tri.uv0) * w0 + float2(tri.uv1) * hit_bary.x + float2(tri.uv2) * hit_bary.y;
-
-                float3 tex_color = albedo;  // fallback: vertex * instance color
-                if (inst.material_override > 0u) {
-                    // material_override is a bitmap index — use directly into gpu_materials[]
-                    uint albedo_idx = gpu_materials[inst.material_override].albedo_index;
-                    if (albedo_idx > 0u && albedo_idx < remap_table_size) {
-                        uint slot = texture_remap[albedo_idx];
-                        if (slot > 0u) {
-                            float4 sampled = alpha_textures[slot].sample(tex_sampler, uv);
-                            tex_color = sampled.rgb * inst_color.rgb;
-                        }
-                    }
-                }
-                float3 ldr = LinearTosRGB(tex_color);
-                final_color = float4(ldr, 1.0);
-            } else {
             float3 total_light = float3(0.0);
 
             if (scene.light_count > 0) {
@@ -461,7 +444,7 @@ kernel void raytrace_main(
                     float min_radius = 1.0;
                     float attenuation = 1.0 / max(dist_sq, min_radius * min_radius);
 
-                    // Shadow ray with door transparency bounce loop
+                    // Shadow ray with transparency bounce loop
                     float visibility = 1.0;
                     ray shadow_ray;
                     shadow_ray.origin = hit_pos + normal_world * 0.002;
@@ -495,10 +478,24 @@ kernel void raytrace_main(
                             continue;
                         }
 
-                        // Skip transparent pixels on billboard/rod overrides for shadow rays
-                        if (should_skip_material_override(s_tri.material_edge_index, s_hit_uv,
-                                s_inst.material_override, gpu_materials,
-                                texture_remap, remap_table_size, alpha_textures, tex_sampler)) {
+                        // Billboard/rod: attenuate visibility by alpha
+                        if (s_tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
+                            float s_bb_alpha = 1.0;
+                            if (s_inst.material_override > 0u) {
+                                uint s_albedo = gpu_materials[s_inst.material_override].albedo_index;
+                                if (s_albedo > 0u && s_albedo < remap_table_size) {
+                                    uint s_slot = texture_remap[s_albedo];
+                                    if (s_slot > 0u) {
+                                        s_bb_alpha = alpha_textures[s_slot].sample(tex_sampler, s_hit_uv).a;
+                                    }
+                                }
+                            }
+                            if (s_bb_alpha < 0.1) {
+                                shadow_ray.origin = shadow_ray.origin + shadow_ray.direction * (shadow_hit.distance + 0.002);
+                                continue;
+                            }
+                            visibility *= (1.0 - s_bb_alpha);
+                            if (visibility < 0.01) { visibility = 0.0; break; }
                             shadow_ray.origin = shadow_ray.origin + shadow_ray.direction * (shadow_hit.distance + 0.002);
                             continue;
                         }
@@ -516,13 +513,18 @@ kernel void raytrace_main(
                 total_light = float3(NdotL * 0.85 + 0.15);
             }
 
-            // Lambertian BRDF + tone mapping + gamma
+            // Lambertian BRDF + tone mapping
             float3 hdr = (albedo / 3.14159265) * total_light;
             hdr *= exp2(0.1); // exposure
-            float3 ldr = ApplyTonemappingCurve(hdr);
-            ldr = LinearTosRGB(ldr);
-            final_color = float4(ldr, 1.0);
-            } // end else (non-emissive lighting)
+            float3 shaded = ApplyTonemappingCurve(hdr);
+
+            // Blend with accumulated billboard transparency
+            float remaining = 1.0 - accum_alpha;
+            float3 blended = accum_color + shaded * remaining;
+            final_color = float4(LinearTosRGB(blended), 1.0);
+        } else if (accum_alpha > 0.0) {
+            // Only billboard hits, no solid background
+            final_color = float4(LinearTosRGB(accum_color), 1.0);
         }
     } else {
         // Brute-force fallback (no shadow rays without TLAS)
