@@ -52,7 +52,8 @@ pub struct RaytraceSceneConstants {
     pub render_height: u32,
     pub instance_count: u32,
     pub total_triangles: u32,
-    pub _pad4: [f32; 2],
+    pub shadow_mode: u32,    // 0=hard, 1=multi-sample, 2=analytic
+    pub frame_number: u32,   // RNG seed, incremented each frame
     pub debug_mode: u32,
     pub texture_count: u32,
     pub use_accel: u32,
@@ -355,6 +356,7 @@ pub fn dispatch(
     render_width: u32,
     render_height: u32,
     compute_pipeline: &ProtocolObject<dyn MTLComputePipelineState>,
+    tile_cull_pipeline: Option<&ProtocolObject<dyn MTLComputePipelineState>>,
     output_texture: &ProtocolObject<dyn MTLTexture>,
     tlas_state: &mut TlasState,
     lights: &[Light],
@@ -441,7 +443,8 @@ pub fn dispatch(
         render_height,
         instance_count: resolved.len() as u32,
         total_triangles: total_tris,
-        _pad4: [0.0; 2],
+        shadow_mode: 2,           // analytic soft shadows by default
+        frame_number: frame as u32,
         debug_mode: 0,
         texture_count: remap.textures.len() as u32,
         use_accel,
@@ -583,7 +586,63 @@ pub fn dispatch(
         );
     }
 
-    // 7. Dispatch compute
+    // 7. Tile-based light culling pass
+    const TILE_SIZE: u32 = 16;
+    const MAX_LIGHTS_PER_TILE: usize = 64;
+    const TILE_STRIDE: usize = 1 + MAX_LIGHTS_PER_TILE;
+
+    let tiles_x = (render_width + TILE_SIZE - 1) / TILE_SIZE;
+    let tiles_y = (render_height + TILE_SIZE - 1) / TILE_SIZE;
+    let total_tiles = (tiles_x * tiles_y) as usize;
+    let tile_data_elems = total_tiles * TILE_STRIDE;
+
+    if !crate::state::ensure_buffer_capacity(
+        device,
+        &mut frame_buffers.tile_data_buf,
+        &mut frame_buffers.tile_data_capacity,
+        tile_data_elems,
+        std::mem::size_of::<u32>(),
+    ) {
+        return;
+    }
+    let tile_data_buf = frame_buffers.tile_data_buf.as_ref().unwrap();
+
+    if let Some(tile_pipeline) = tile_cull_pipeline {
+        let cull_cmd = match command_queue.commandBuffer() {
+            Some(b) => b,
+            None => return,
+        };
+        let cull_enc = match cull_cmd.computeCommandEncoder() {
+            Some(e) => e,
+            None => return,
+        };
+        cull_enc.setComputePipelineState(tile_pipeline);
+        unsafe {
+            cull_enc.setBuffer_offset_atIndex(Some(scene_buf), 0, 0);
+        }
+        if !lights.is_empty() {
+            if let Some(ref buf) = frame_buffers.light_buf {
+                unsafe {
+                    cull_enc.setBuffer_offset_atIndex(Some(buf), 0, 9);
+                }
+            }
+        }
+        unsafe {
+            cull_enc.setBuffer_offset_atIndex(Some(tile_data_buf), 0, 13);
+        }
+        let tile_threads_per_group = MTLSize { width: 16, height: 16, depth: 1 };
+        let tile_threadgroups = MTLSize {
+            width: (tiles_x as usize + 15) / 16,
+            height: (tiles_y as usize + 15) / 16,
+            depth: 1,
+        };
+        cull_enc.dispatchThreadgroups_threadsPerThreadgroup(tile_threadgroups, tile_threads_per_group);
+        cull_enc.endEncoding();
+        cull_cmd.commit();
+        cull_cmd.waitUntilCompleted();
+    }
+
+    // 8. Dispatch main raytrace compute
     let cmd_buf = match command_queue.commandBuffer() {
         Some(b) => b,
         None => return,
@@ -643,6 +702,11 @@ pub fn dispatch(
     // Bind remap size at index 12
     unsafe {
         encoder.setBuffer_offset_atIndex(Some(rs_buf), 0, 12);
+    }
+
+    // Bind tile light data at index 13
+    unsafe {
+        encoder.setBuffer_offset_atIndex(Some(tile_data_buf), 0, 13);
     }
 
     // Bind cached sampler

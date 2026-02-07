@@ -30,7 +30,8 @@ struct SceneConstants {
     uint   render_height;
     uint   instance_count;
     uint   total_triangles;
-    float  _pad4[2];
+    uint   shadow_mode;
+    uint   frame_number;
     uint   debug_mode;
     uint   texture_count;
     uint   use_accel;
@@ -200,6 +201,131 @@ float3 LinearTosRGB(float3 c) {
 }
 
 // ============================================================================
+// Soft shadow helpers
+// ============================================================================
+
+// PCG hash for cheap pseudo-random numbers
+uint pcg_hash(uint input) {
+    uint state = input * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float rand_float(uint seed) {
+    return float(pcg_hash(seed)) / 4294967295.0;
+}
+
+// Light radius from transform scale (set by RT_MakeSphericalLight)
+// Row-major 3x4: row 0 = [transform[0], transform[1], transform[2], tx]
+float get_light_radius(constant Light& l) {
+    return length(float3(l.transform[0], l.transform[1], l.transform[2]));
+}
+
+// Uniform sphere surface sampling from two random values in [0,1]
+float3 sample_sphere_point(float u, float v) {
+    float z = 1.0 - 2.0 * u;
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    float phi = 2.0 * 3.14159265 * v;
+    return float3(r * cos(phi), r * sin(phi), z);
+}
+
+// ============================================================================
+// Shadow tracing helper (transparency-aware bounce loop)
+// ============================================================================
+
+struct ShadowResult {
+    float visibility;
+    float opaque_hit_dist;  // distance to first opaque blocker, -1 if none
+};
+
+ShadowResult trace_shadow_visibility(
+    float3 shadow_origin,
+    float3 shadow_dir,
+    float max_dist,
+    instance_acceleration_structure accel_struct,
+    constant Triangle* triangles,
+    constant Instance* instances,
+    constant uint* material_edges,
+    constant ushort* material_indices,
+    constant GPUMaterial* gpu_materials,
+    constant uint* texture_remap,
+    constant uint& remap_table_size,
+    array<texture2d<float, access::sample>, 32> alpha_textures,
+    sampler tex_sampler)
+{
+    ShadowResult result;
+    result.visibility = 1.0;
+    result.opaque_hit_dist = -1.0;
+
+    ray shadow_ray;
+    shadow_ray.origin = shadow_origin;
+    shadow_ray.direction = shadow_dir;
+    shadow_ray.min_distance = 0.001;
+    shadow_ray.max_distance = max_dist;
+
+    float dist_traveled = 0.0;
+
+    for (int sbounce = 0; sbounce < 4; sbounce++) {
+        intersector<triangle_data, instancing> shadow_i;
+        shadow_i.accept_any_intersection(false);
+        shadow_i.force_opacity(forced_opacity::opaque);
+        auto shadow_hit = shadow_i.intersect(shadow_ray, accel_struct, 0xFF);
+
+        if (shadow_hit.type == intersection_type::none) break;
+
+        uint s_inst_id = shadow_hit.instance_id;
+        uint s_prim_id = shadow_hit.primitive_id;
+        constant Instance& s_inst = instances[s_inst_id];
+        uint s_tri_idx = s_inst.triangle_offset + s_prim_id;
+        constant Triangle& s_tri = triangles[s_tri_idx];
+
+        // Interpolate UV at shadow hit point
+        float2 s_bary = shadow_hit.triangle_barycentric_coord;
+        float s_w0 = 1.0 - s_bary.x - s_bary.y;
+        float2 s_hit_uv = float2(s_tri.uv0) * s_w0 + float2(s_tri.uv1) * s_bary.x + float2(s_tri.uv2) * s_bary.y;
+
+        if (should_skip_cutout(s_tri.material_edge_index, s_hit_uv,
+                material_edges, material_indices, gpu_materials,
+                texture_remap, remap_table_size, alpha_textures, tex_sampler)) {
+            shadow_ray.origin = shadow_ray.origin + shadow_ray.direction * (shadow_hit.distance + 0.002);
+            dist_traveled += shadow_hit.distance + 0.002;
+            continue;
+        }
+
+        // Billboard/rod: attenuate visibility by alpha
+        if (s_tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
+            float s_bb_alpha = 1.0;
+            if (s_inst.material_override > 0u) {
+                uint s_albedo = gpu_materials[s_inst.material_override].albedo_index;
+                if (s_albedo > 0u && s_albedo < remap_table_size) {
+                    uint s_slot = texture_remap[s_albedo];
+                    if (s_slot > 0u) {
+                        s_bb_alpha = alpha_textures[s_slot].sample(tex_sampler, s_hit_uv).a;
+                    }
+                }
+            }
+            if (s_bb_alpha < 0.1) {
+                shadow_ray.origin = shadow_ray.origin + shadow_ray.direction * (shadow_hit.distance + 0.002);
+                dist_traveled += shadow_hit.distance + 0.002;
+                continue;
+            }
+            result.visibility *= (1.0 - s_bb_alpha);
+            if (result.visibility < 0.01) { result.visibility = 0.0; break; }
+            shadow_ray.origin = shadow_ray.origin + shadow_ray.direction * (shadow_hit.distance + 0.002);
+            dist_traveled += shadow_hit.distance + 0.002;
+            continue;
+        }
+
+        // Opaque blocker
+        result.opaque_hit_dist = dist_traveled + shadow_hit.distance;
+        result.visibility = 0.0;
+        break;
+    }
+
+    return result;
+}
+
+// ============================================================================
 // Brute-force ray-triangle intersection (Moller-Trumbore)
 // ============================================================================
 struct HitResult {
@@ -270,6 +396,92 @@ HitResult brute_force_intersect(
 }
 
 // ============================================================================
+// Tile-based light culling constants
+// ============================================================================
+
+constant uint TILE_SIZE = 16;
+constant uint MAX_LIGHTS_PER_TILE = 64;
+constant uint TILE_STRIDE = 1 + MAX_LIGHTS_PER_TILE;  // count + indices
+
+// ============================================================================
+// Tile light culling kernel (separate pass, one thread per tile)
+// ============================================================================
+
+kernel void tile_cull_lights(
+    constant SceneConstants& scene [[buffer(0)]],
+    constant Light* lights [[buffer(9)]],
+    device uint* tile_data [[buffer(13)]],
+    uint2 tile_id [[thread_position_in_grid]])
+{
+    uint tiles_x = (scene.render_width + TILE_SIZE - 1) / TILE_SIZE;
+    uint tiles_y = (scene.render_height + TILE_SIZE - 1) / TILE_SIZE;
+    if (tile_id.x >= tiles_x || tile_id.y >= tiles_y) return;
+
+    uint tile_idx = tile_id.y * tiles_x + tile_id.x;
+    uint base = tile_idx * TILE_STRIDE;
+
+    float half_h = tan(scene.vfov_radians * 0.5);
+    float3 cam_pos = float3(scene.camera_position);
+    float3 cam_fwd = float3(scene.camera_forward);
+    float3 cam_right = float3(scene.camera_right);
+    float3 cam_up = float3(scene.camera_up);
+
+    // Tile screen bounds in NDC [-1, 1]
+    float tile_ndc_l = float(tile_id.x * TILE_SIZE) / float(scene.render_width) * 2.0 - 1.0;
+    float tile_ndc_r = float(min((tile_id.x + 1) * TILE_SIZE, scene.render_width)) / float(scene.render_width) * 2.0 - 1.0;
+    float tile_ndc_t = -(float(tile_id.y * TILE_SIZE) / float(scene.render_height) * 2.0 - 1.0);
+    float tile_ndc_b = -(float(min((tile_id.y + 1) * TILE_SIZE, scene.render_height)) / float(scene.render_height) * 2.0 - 1.0);
+
+    // Tile center direction (for rough spatial test)
+    float ndc_cx = (tile_ndc_l + tile_ndc_r) * 0.5;
+    float ndc_cy = (tile_ndc_t + tile_ndc_b) * 0.5;
+    float3 tile_center_dir = normalize(cam_fwd + cam_right * (ndc_cx * half_h * scene.aspect_ratio) + cam_up * (ndc_cy * half_h));
+
+    // Half-angle of tile frustum (conservative)
+    float tile_half_angle = length(float2(tile_ndc_r - tile_ndc_l, tile_ndc_t - tile_ndc_b)) * 0.5 * half_h * max(scene.aspect_ratio, 1.0);
+
+    uint count = 0;
+    for (uint li = 0; li < scene.light_count && count < MAX_LIGHTS_PER_TILE; li++) {
+        float3 light_pos = float3(
+            lights[li].transform[3],
+            lights[li].transform[7],
+            lights[li].transform[11]);
+        float3 light_emission = decode_rgbe(lights[li].emission);
+        float emission_mag = max(max(light_emission.r, light_emission.g), light_emission.b);
+        float max_dist = sqrt(emission_mag * 100.0);
+
+        float3 to_light = light_pos - cam_pos;
+        float depth = dot(to_light, cam_fwd);
+
+        // Light behind camera: include if within max influence range
+        if (depth < -max_dist) continue;
+
+        // Distance cutoff: skip if too far regardless of tile
+        float light_dist = length(to_light);
+        if (light_dist > max_dist + 500.0) continue;  // generous buffer for tile depth range
+
+        if (depth > 0.1) {
+            // Project light to NDC and test overlap with tile
+            float ndc_x = dot(to_light, cam_right) / (depth * half_h * scene.aspect_ratio);
+            float ndc_y = dot(to_light, cam_up) / (depth * half_h);
+            float ndc_radius = max_dist / (depth * half_h);
+
+            // Circle-rect overlap: closest point on tile rect to light center
+            float closest_x = clamp(ndc_x, tile_ndc_l, tile_ndc_r);
+            float closest_y = clamp(ndc_y, tile_ndc_b, tile_ndc_t);
+            float dx = ndc_x - closest_x;
+            float dy = ndc_y - closest_y;
+            if (dx * dx + dy * dy > ndc_radius * ndc_radius) continue;
+        }
+        // else: light near camera plane, include conservatively
+
+        tile_data[base + 1 + count] = li;
+        count++;
+    }
+    tile_data[base] = count;
+}
+
+// ============================================================================
 // Main raytracing kernel
 // ============================================================================
 kernel void raytrace_main(
@@ -284,6 +496,7 @@ kernel void raytrace_main(
     constant Light* lights [[buffer(9)]],
     constant uint* texture_remap [[buffer(11)]],
     constant uint& remap_table_size [[buffer(12)]],
+    constant uint* tile_light_data [[buffer(13)]],
     array<texture2d<float, access::sample>, 32> alpha_textures [[texture(16)]],
     sampler tex_sampler [[sampler(0)]],
     uint2 gid [[thread_position_in_grid]])
@@ -423,8 +636,16 @@ kernel void raytrace_main(
             float3 total_light = float3(0.0);
 
             if (scene.light_count > 0) {
-                // Point light loop with shadow rays (transparency-aware)
-                for (uint li = 0; li < scene.light_count; li++) {
+                // Tile-based light loop: read culled light list for this pixel's tile
+                uint tile_x = gid.x / TILE_SIZE;
+                uint tile_y = gid.y / TILE_SIZE;
+                uint tiles_per_row = (scene.render_width + TILE_SIZE - 1) / TILE_SIZE;
+                uint tile_idx = tile_y * tiles_per_row + tile_x;
+                uint tile_base = tile_idx * TILE_STRIDE;
+                uint tile_count = min(tile_light_data[tile_base], MAX_LIGHTS_PER_TILE);
+
+                for (uint tli = 0; tli < tile_count; tli++) {
+                    uint li = tile_light_data[tile_base + 1 + tli];
                     // Extract position from transform column 3 (row-major: indices 3, 7, 11)
                     float3 light_pos = float3(
                         lights[li].transform[3],
@@ -434,6 +655,12 @@ kernel void raytrace_main(
 
                     float3 to_light = light_pos - hit_pos;
                     float dist_sq = dot(to_light, to_light);
+
+                    // Distance cutoff: skip if max contribution is negligible
+                    // emission / dist_sq < 0.01 → dist_sq > emission * 100
+                    float emission_mag = max(max(light_emission.r, light_emission.g), light_emission.b);
+                    if (dist_sq > emission_mag * 100.0) continue;
+
                     float dist = sqrt(dist_sq);
                     if (dist < 0.001) continue;
                     float3 L = to_light / dist;
@@ -445,64 +672,59 @@ kernel void raytrace_main(
                     float min_radius = 1.0;
                     float attenuation = 1.0 / max(dist_sq, min_radius * min_radius);
 
-                    // Shadow ray with transparency bounce loop
+                    // Shadow visibility — branched on shadow_mode
+                    float3 shadow_origin = hit_pos + normal_world * 0.002;
                     float visibility = 1.0;
-                    ray shadow_ray;
-                    shadow_ray.origin = hit_pos + normal_world * 0.002;
-                    shadow_ray.direction = L;
-                    shadow_ray.min_distance = 0.001;
-                    shadow_ray.max_distance = dist - 0.002;
 
-                    for (int sbounce = 0; sbounce < 4; sbounce++) {
-                        intersector<triangle_data, instancing> shadow_i;
-                        shadow_i.accept_any_intersection(false);
-                        shadow_i.force_opacity(forced_opacity::opaque);
-                        auto shadow_hit = shadow_i.intersect(shadow_ray, accel_struct, 0xFF);
+                    if (scene.shadow_mode == 1) {
+                        // Mode 1: Multi-sample soft shadows (8 jittered rays)
+                        float light_radius = get_light_radius(lights[li]);
+                        float vis_sum = 0.0;
+                        for (uint si = 0; si < 8; si++) {
+                            uint seed = (gid.y * scene.render_width + gid.x) * 997u
+                                      + scene.frame_number * 17u + li * 31u + si * 7u;
+                            float u = rand_float(seed);
+                            float v = rand_float(seed + 1u);
+                            float3 offset = sample_sphere_point(u, v) * light_radius;
+                            float3 sample_pos = light_pos + offset;
+                            float3 to_sample = sample_pos - hit_pos;
+                            float sample_dist = length(to_sample);
+                            if (sample_dist < 0.001) { vis_sum += 1.0; continue; }
+                            float3 sample_L = to_sample / sample_dist;
 
-                        if (shadow_hit.type == intersection_type::none) break;
-
-                        uint s_inst_id = shadow_hit.instance_id;
-                        uint s_prim_id = shadow_hit.primitive_id;
-                        constant Instance& s_inst = instances[s_inst_id];
-                        uint s_tri_idx = s_inst.triangle_offset + s_prim_id;
-                        constant Triangle& s_tri = triangles[s_tri_idx];
-
-                        // Interpolate UV at shadow hit point
-                        float2 s_bary = shadow_hit.triangle_barycentric_coord;
-                        float s_w0 = 1.0 - s_bary.x - s_bary.y;
-                        float2 s_hit_uv = float2(s_tri.uv0) * s_w0 + float2(s_tri.uv1) * s_bary.x + float2(s_tri.uv2) * s_bary.y;
-
-                        if (should_skip_cutout(s_tri.material_edge_index, s_hit_uv,
+                            ShadowResult sr = trace_shadow_visibility(
+                                shadow_origin, sample_L, sample_dist - 0.002,
+                                accel_struct, triangles, instances,
                                 material_edges, material_indices, gpu_materials,
-                                texture_remap, remap_table_size, alpha_textures, tex_sampler)) {
-                            shadow_ray.origin = shadow_ray.origin + shadow_ray.direction * (shadow_hit.distance + 0.002);
-                            continue;
+                                texture_remap, remap_table_size, alpha_textures, tex_sampler);
+                            vis_sum += sr.visibility;
                         }
+                        visibility = vis_sum / 8.0;
+                    } else if (scene.shadow_mode == 2) {
+                        // Mode 2: Analytic soft shadows (1 ray + PCSS-style penumbra)
+                        ShadowResult sr = trace_shadow_visibility(
+                            shadow_origin, L, dist - 0.002,
+                            accel_struct, triangles, instances,
+                            material_edges, material_indices, gpu_materials,
+                            texture_remap, remap_table_size, alpha_textures, tex_sampler);
 
-                        // Billboard/rod: attenuate visibility by alpha
-                        if (s_tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
-                            float s_bb_alpha = 1.0;
-                            if (s_inst.material_override > 0u) {
-                                uint s_albedo = gpu_materials[s_inst.material_override].albedo_index;
-                                if (s_albedo > 0u && s_albedo < remap_table_size) {
-                                    uint s_slot = texture_remap[s_albedo];
-                                    if (s_slot > 0u) {
-                                        s_bb_alpha = alpha_textures[s_slot].sample(tex_sampler, s_hit_uv).a;
-                                    }
-                                }
-                            }
-                            if (s_bb_alpha < 0.1) {
-                                shadow_ray.origin = shadow_ray.origin + shadow_ray.direction * (shadow_hit.distance + 0.002);
-                                continue;
-                            }
-                            visibility *= (1.0 - s_bb_alpha);
-                            if (visibility < 0.01) { visibility = 0.0; break; }
-                            shadow_ray.origin = shadow_ray.origin + shadow_ray.direction * (shadow_hit.distance + 0.002);
-                            continue;
+                        if (sr.opaque_hit_dist >= 0.0) {
+                            // Opaque blocker found — estimate penumbra
+                            float light_radius = get_light_radius(lights[li]);
+                            float angular_size = light_radius / dist;
+                            float t = sr.opaque_hit_dist / dist;
+                            visibility = smoothstep(0.0, max(angular_size, 0.001), t * angular_size);
+                        } else {
+                            visibility = sr.visibility;
                         }
-
-                        visibility = 0.0;
-                        break;
+                    } else {
+                        // Mode 0: Hard shadows (single ray, current behavior)
+                        ShadowResult sr = trace_shadow_visibility(
+                            shadow_origin, L, dist - 0.002,
+                            accel_struct, triangles, instances,
+                            material_edges, material_indices, gpu_materials,
+                            texture_remap, remap_table_size, alpha_textures, tex_sampler);
+                        visibility = sr.visibility;
                     }
 
                     total_light += light_emission * NdotL * attenuation * visibility;

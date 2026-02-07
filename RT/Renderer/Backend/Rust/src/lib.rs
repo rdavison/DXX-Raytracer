@@ -94,6 +94,22 @@ pub extern "C" fn RT_RendererInit(params: *const RendererInitParams) {
         eprintln!("[Rust Metal] ERROR: raytrace_main function not found in library");
     }
 
+    // Create tile culling compute pipeline from same library
+    let tile_func_name = objc2_foundation::NSString::from_str("tile_cull_lights");
+    if let Some(func) = rt_library.newFunctionWithName(&tile_func_name) {
+        match s.device.newComputePipelineStateWithFunction_error(&func) {
+            Ok(pipeline) => {
+                s.tile_cull_pipeline = Some(pipeline);
+                eprintln!("[Rust Metal] Tile cull compute pipeline created");
+            }
+            Err(e) => {
+                eprintln!("[Rust Metal] ERROR: Failed to create tile cull pipeline: {:?}", e);
+            }
+        }
+    } else {
+        eprintln!("[Rust Metal] ERROR: tile_cull_lights function not found in library");
+    }
+
     // Create cached raytrace sampler (reused every frame)
     {
         let sampler_desc = MTLSamplerDescriptor::new();
@@ -742,6 +758,7 @@ pub extern "C" fn RT_RaytraceRender() {
         Some(p) => p.clone(),
         None => return,
     };
+    let tile_cull_pipeline = s.tile_cull_pipeline.as_ref().cloned();
 
     let render_w = s.render_width;
     let render_h = s.render_height;
@@ -774,6 +791,7 @@ pub extern "C" fn RT_RaytraceRender() {
         render_w,
         render_h,
         &pipeline,
+        tile_cull_pipeline.as_deref(),
         &output_tex,
         &mut s.tlas_state,
         &lights,

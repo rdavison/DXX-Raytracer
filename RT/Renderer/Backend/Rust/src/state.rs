@@ -41,6 +41,8 @@ pub struct FrameBuffers {
     pub remap_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub remap_capacity: usize,
     pub remap_size_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub tile_data_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub tile_data_capacity: usize,
 }
 
 impl FrameBuffers {
@@ -59,6 +61,8 @@ impl FrameBuffers {
             remap_buf: None,
             remap_capacity: 0,
             remap_size_buf: None,
+            tile_data_buf: None,
+            tile_data_capacity: 0,
         }
     }
 }
@@ -169,6 +173,7 @@ pub struct MetalState {
     pub raytrace_output_h: u32,
     pub raytrace_output_handle: ResourceHandle,
     pub compute_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    pub tile_cull_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub camera: Camera,
     pub tlas_state: TlasState,
     pub render_width: u32,
@@ -236,6 +241,7 @@ pub fn init(device_state: DeviceState) {
         raytrace_output_h: 0,
         raytrace_output_handle: ResourceHandle::NULL,
         compute_pipeline: None,
+        tile_cull_pipeline: None,
         camera: Camera::default(),
         tlas_state: TlasState::new(),
         render_width: 640,
