@@ -1,3 +1,24 @@
+// ============================================================================
+//  RenderBackend.mm - Metal Raytracing Backend
+// ============================================================================
+//
+//  Like a shepherd's map of rolling hills and vales,
+//  This file is organized in sections, each a tale:
+//
+//  1. INCLUDES & GLOBALS ........... (line ~30)   - Headers and shared state
+//  2. RASTER PIPELINE .............. (line ~60)   - 2D triangle/line rendering
+//  3. LOGGING ...................... (line ~420)  - Debug output helpers
+//  4. INIT & FRAME LIFECYCLE ....... (line ~450)  - Setup, begin/end frame
+//  5. RESOURCE MANAGEMENT .......... (line ~930)  - Textures and meshes
+//  6. RAYTRACING SUBMISSION ........ (line ~1170) - Submit meshes to raytrace
+//  7. ACCELERATION STRUCTURES ...... (line ~1260) - BLAS/TLAS building
+//  8. TEXTURE REMAP ................ (line ~1490) - 31-slot texture mapping
+//  9. SCENE CONSTANTS & DISPATCH ... (line ~1670) - GPU uniform setup
+// 10. RAYTRACE RENDER .............. (line ~1790) - Main entry point
+// 11. RASTER RENDER ................ (line ~1860) - 2D rendering functions
+//
+// ============================================================================
+
 #include "RenderBackend.h"
 
 #ifdef defer
@@ -20,6 +41,10 @@
 #include <vector>
 #include <stddef.h>
 
+// ============================================================================
+// SECTION 1: GLOBALS & RASTER TYPES
+// ============================================================================
+
 struct RasterBatch
 {
 	RT_ResourceHandle texture;
@@ -34,6 +59,10 @@ static double g_last_line_log_time = 0.0;
 static uint64_t g_raster_line_calls = 0;
 static uint64_t g_raster_line_vertices = 0;
 static bool g_raster_fullscreen_cover = false;
+
+// ============================================================================
+// SECTION 2: RASTER PIPELINE CREATION
+// ============================================================================
 
 static bool ComputeRasterFullscreenCover()
 {
@@ -404,6 +433,10 @@ static void EncodeRasterBatches(id<MTLRenderCommandEncoder> renderEncoder,
 RT_MaterialEdge g_rt_material_edges[RT_MAX_MATERIAL_EDGES];
 uint16_t        g_rt_material_indices[RT_MAX_MATERIALS];
 RT_Material     g_rt_materials[RT_MAX_TEXTURES];
+
+// ============================================================================
+// SECTION 3: METAL STATE & SLOTMAPS
+// ============================================================================
 
 namespace RT
 {
@@ -1283,6 +1316,10 @@ namespace RenderBackend
 		return combined;
 	}
 
+	// ========================================================================
+	// SECTION 7: ACCELERATION STRUCTURES (BLAS/TLAS)
+	// ========================================================================
+
 	// Build the top-level acceleration structure from pending meshes.
 	// Returns true if the TLAS was built successfully.
 	static bool buildTLAS()
@@ -1478,6 +1515,14 @@ namespace RenderBackend
 		});
 	}
 
+	// ========================================================================
+	// SECTION 8: TEXTURE REMAP (Legacy 31-slot path)
+	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	// When argument buffers are not available, we must map textures to slots.
+	// Like fitting thirty sheep through a narrow gate,
+	// We prioritize overlays, lest their textures wait.
+	// ========================================================================
+
 	// Scan triangles and build the per-frame texture remap table + bound texture array.
 	// Returns the number of texture slots used (including reserved slot 0).
 	static constexpr uint32_t MAX_BOUND_TEXTURES = 31;
@@ -1514,7 +1559,19 @@ namespace RenderBackend
 			if (mat_edge_idx >= RT_MAX_MATERIAL_EDGES) continue;
 
 			RT_MaterialEdge edge = g_rt_material_edges[mat_edge_idx];
-			uint16_t mat2_tmap = edge.mat2 & 0x3FFF;
+			// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+			// O wandering shepherd, heed this humble gate!
+			// The mat2 field holds treasures three in state:
+			//   - Bits 0-9: the texture index, our woolly flock
+			//   - Bits 10-13: door openness, the turning lock
+			//   - Bits 14-15: orientation, how pastures face
+			//
+			// Use RT_MAT2_TMAP_MASK (0x03FF) with care,
+			// Lest door_openness bits corrupt the texture there!
+			// For 0x3FFF would graze on forbidden land,
+			// And static snow would fall where doors should stand.
+			// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+			uint16_t mat2_tmap = edge.mat2 & RT_MAT2_TMAP_MASK;
 			if (mat2_tmap == 0) continue;
 
 			uint32_t mat2_idx = get_material_index(mat2_tmap);
@@ -1579,7 +1636,13 @@ namespace RenderBackend
 				if (mei < RT_MAX_MATERIAL_EDGES) {
 					RT_MaterialEdge edge = g_rt_material_edges[mei];
 					uint16_t mat1 = edge.mat1;
-					uint16_t mat2_tmap = edge.mat2 & 0x3FFF;
+					// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+					// Again we pluck the texture from mat2's gentle stream,
+					// With RT_MAT2_TMAP_MASK, not 0x3FFF's broader gleam.
+					// The door's sweet openness must rest in bits above,
+					// Untouched, like sleeping lambs beneath the stars we love.
+					// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+					uint16_t mat2_tmap = edge.mat2 & RT_MAT2_TMAP_MASK;
 					uint16_t orient = edge.mat2 >> 14;
 					uint32_t mat1_idx = get_material_index(mat1);
 					uint32_t mat2_idx = mat2_tmap ? get_material_index(mat2_tmap) : 0;
@@ -1646,6 +1709,10 @@ namespace RenderBackend
 		return next_slot;
 	}
 
+	// ========================================================================
+	// SECTION 9: SCENE CONSTANTS & RAY DISPATCH
+	// ========================================================================
+
 	// Pack camera, lights, debug mode, and scene info into the uniform buffer.
 	static void setSceneConstants(uint32_t w, uint32_t h, uint32_t total_tris,
 								  uint32_t texture_count, bool tlas_built)
@@ -1662,7 +1729,7 @@ namespace RenderBackend
 		scene->render_height = h;
 		scene->instance_count = g_mtl.raytrace_instance_count;
 		scene->total_triangles = total_tris;
-		scene->debug_mode = 0;
+		scene->debug_mode = 0;  // Normal rendering
 		scene->texture_count = texture_count;
 		scene->use_accel = tlas_built ? 1 : 0;
 		scene->light_count = g_mtl.raytrace_light_count;
@@ -1760,9 +1827,12 @@ namespace RenderBackend
 		}
 	}
 
-	// ------------------------------------------------------------------
-	// Main raytrace render orchestrator
-	// ------------------------------------------------------------------
+	// ========================================================================
+	// SECTION 10: RAYTRACE RENDER (Main Entry Point)
+	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	// Here the shepherd calls the flock to gather,
+	// Triangles and lights, through acceleration's lather.
+	// ========================================================================
 	void RaytraceRender()
 	{
 		static bool logged_once = false;
@@ -1836,7 +1906,10 @@ namespace RenderBackend
 	}
 	void RaytraceSetSkyColors(RT_Vec3 top, RT_Vec3 bottom) { MTL_STUB("RaytraceSetSkyColors"); }
 
-	// Rasterization stubs
+	// ========================================================================
+	// SECTION 11: RASTERIZATION (2D UI, HUD, Overlays)
+	// ========================================================================
+
 	void RasterSetViewport(float x, float y, float width, float height)
 	{
 		g_mtl.viewport_x = x;

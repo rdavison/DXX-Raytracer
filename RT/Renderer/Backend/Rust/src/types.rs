@@ -39,6 +39,48 @@ pub struct Mat4 {
     pub e: [[f32; 4]; 4],
 }
 
+impl Vec3 {
+    pub fn scale(self, s: f32) -> Self {
+        Vec3 { x: self.x * s, y: self.y * s, z: self.z * s }
+    }
+
+    pub fn add(self, other: Self) -> Self {
+        Vec3 { x: self.x + other.x, y: self.y + other.y, z: self.z + other.z }
+    }
+
+    pub fn sub(self, other: Self) -> Self {
+        Vec3 { x: self.x - other.x, y: self.y - other.y, z: self.z - other.z }
+    }
+
+    pub fn cross(self, other: Self) -> Self {
+        Vec3 {
+            x: self.y * other.z - self.z * other.y,
+            y: self.z * other.x - self.x * other.z,
+            z: self.x * other.y - self.y * other.x,
+        }
+    }
+
+    pub fn dot(self, other: Self) -> f32 {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
+
+    pub fn length(self) -> f32 {
+        self.dot(self).sqrt()
+    }
+
+    pub fn normalize(self) -> Self {
+        let len = self.length();
+        if len < 1e-12 {
+            return self;
+        }
+        self.scale(1.0 / len)
+    }
+
+    pub fn negate(self) -> Self {
+        Vec3 { x: -self.x, y: -self.y, z: -self.z }
+    }
+}
+
 impl Default for Mat4 {
     fn default() -> Self {
         Self::identity()
@@ -141,6 +183,39 @@ impl Mat4 {
         for r in 0..4 {
             for c in 0..4 {
                 result.e[r][c] = inv[r * 4 + c] * inv_det;
+            }
+        }
+        result
+    }
+
+    /// Build a 4x4 matrix from three basis vectors (placed as columns of the upper-left 3x3).
+    pub fn from_basis_vectors(x: Vec3, y: Vec3, z: Vec3) -> Self {
+        let mut m = Mat4 { e: [[0.0; 4]; 4] };
+        m.e[0][0] = x.x; m.e[0][1] = y.x; m.e[0][2] = z.x;
+        m.e[1][0] = x.y; m.e[1][1] = y.y; m.e[1][2] = z.y;
+        m.e[2][0] = x.z; m.e[2][1] = y.z; m.e[2][2] = z.z;
+        m.e[3][3] = 1.0;
+        m
+    }
+
+    /// Build a translation matrix.
+    pub fn from_translation(t: Vec3) -> Self {
+        let mut m = Self::identity();
+        m.e[0][3] = t.x;
+        m.e[1][3] = t.y;
+        m.e[2][3] = t.z;
+        m
+    }
+
+    /// 4x4 matrix multiplication.
+    pub fn mul(self, other: Self) -> Self {
+        let mut result = Mat4 { e: [[0.0; 4]; 4] };
+        for r in 0..4 {
+            for c in 0..4 {
+                result.e[r][c] = self.e[r][0] * other.e[0][c]
+                    + self.e[r][1] * other.e[1][c]
+                    + self.e[r][2] * other.e[2][c]
+                    + self.e[r][3] * other.e[3][c];
             }
         }
         result

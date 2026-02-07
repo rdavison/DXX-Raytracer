@@ -1,15 +1,20 @@
-//! Per-frame raytracing orchestration (Phase 3A).
+//! Per-frame raytracing orchestration.
 //!
 //! Builds combined triangle buffer, TLAS, and dispatches compute shader.
+//! Works directly with domain types — no PendingInstance bridge.
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::*;
 
+use crate::domain::SceneInstance;
+use crate::gpu::accel::TlasState;
 use crate::mesh::MeshSlotMap;
 use crate::state::FrameBuffers;
 use crate::texture::TextureSlotMap;
 use crate::types::*;
+
+use super::texture_remap;
 
 // ============================================================================
 // GPU-compatible structs matching shader layout
@@ -54,59 +59,77 @@ pub struct RaytraceSceneConstants {
     pub light_count: u32,
 }
 
-/// Pending mesh instance queued for this frame.
-pub struct PendingInstance {
-    pub instance: RaytraceInstance,
+/// Instance resolved against the mesh slotmap — ready for GPU upload.
+/// Created at dispatch time from SceneInstance + mesh lookup.
+pub(crate) struct ResolvedInstance {
+    pub gpu: RaytraceInstance,
     pub mesh_handle: ResourceHandle,
+}
+
+// ============================================================================
+// Resolve domain instances into GPU-ready instances
+// ============================================================================
+
+/// Diagnostics from instance resolution.
+pub(crate) struct ResolveDiagnostics {
+    pub level_meshes: u32,
+    pub billboards: u32,
+    pub rods: u32,
+    pub failed: u32,
+}
+
+/// Convert domain `SceneInstance`s into `ResolvedInstance`s by looking up
+/// mesh data in the slotmap. Instances with missing meshes are filtered out.
+fn resolve_instances(
+    instances: &[SceneInstance],
+    mesh_slotmap: &MeshSlotMap,
+) -> (Vec<ResolvedInstance>, ResolveDiagnostics) {
+    let mut diag = ResolveDiagnostics {
+        level_meshes: 0, billboards: 0, rods: 0, failed: 0,
+    };
+    let resolved = instances.iter().filter_map(|si| {
+        let handle = si.mesh().raw();
+        let mesh = match mesh_slotmap.find(handle) {
+            Some(m) => m,
+            None => {
+                diag.failed += 1;
+                return None;
+            }
+        };
+        match si {
+            SceneInstance::LevelMesh { .. } => diag.level_meshes += 1,
+            SceneInstance::Billboard { .. } => diag.billboards += 1,
+            SceneInstance::Rod { .. } => diag.rods += 1,
+        }
+        Some(ResolvedInstance {
+            gpu: RaytraceInstance {
+                object_to_world: *si.transform(),
+                world_to_object: si.transform().inverse(),
+                triangle_buffer_idx: handle.index,
+                triangle_count: mesh.triangle_count as u32,
+                color: si.color().packed(),
+                material_override: si.material_override()
+                    .map(|m| m.as_u16() as u32).unwrap_or(0),
+                triangle_offset: 0,
+                _pad: [0; 3],
+            },
+            mesh_handle: handle,
+        })
+    }).collect();
+    (resolved, diag)
 }
 
 // ============================================================================
 // Per-frame functions
 // ============================================================================
 
-/// Clear the instance list for a new frame.
-pub fn begin_scene(instances: &mut Vec<PendingInstance>) {
-    instances.clear();
-}
-
-/// Queue a mesh instance for raytracing this frame.
-pub fn queue_mesh_instance(
-    instances: &mut Vec<PendingInstance>,
-    mesh_slotmap: &MeshSlotMap,
-    mesh_handle: ResourceHandle,
-    transform: &Mat4,
-    color: u32,
-    material_override: u16,
-) {
-    let mesh = match mesh_slotmap.find(mesh_handle) {
-        Some(m) => m,
-        None => return,
-    };
-
-    let world_to_object = transform.inverse();
-
-    instances.push(PendingInstance {
-        instance: RaytraceInstance {
-            object_to_world: *transform,
-            world_to_object,
-            triangle_buffer_idx: mesh_handle.index,
-            triangle_count: mesh.triangle_count as u32,
-            color,
-            material_override: material_override as u32,
-            triangle_offset: 0, // set during build_combined_triangle_buffer
-            _pad: [0; 3],
-        },
-        mesh_handle,
-    });
-}
-
-/// Build a single combined triangle buffer from all queued instances.
+/// Build a single combined triangle buffer from all resolved instances.
 /// Uses pre-allocated buffer from FrameBuffers, growing only when needed.
 /// Updates triangle_offset for each instance. Returns total_triangle_count, or None if empty.
-pub fn build_combined_triangle_buffer(
+fn build_combined_triangle_buffer(
     device: &ProtocolObject<dyn MTLDevice>,
     mesh_slotmap: &MeshSlotMap,
-    instances: &mut [PendingInstance],
+    instances: &mut [ResolvedInstance],
     frame_buffers: &mut FrameBuffers,
 ) -> Option<u32> {
     let tri_size = std::mem::size_of::<Triangle>();
@@ -139,7 +162,7 @@ pub fn build_combined_triangle_buffer(
     for inst in instances.iter_mut() {
         if let Some(mesh) = mesh_slotmap.find(inst.mesh_handle) {
             let byte_count = mesh.triangle_count * tri_size;
-            inst.instance.triangle_offset = (offset / tri_size) as u32;
+            inst.gpu.triangle_offset = (offset / tri_size) as u32;
 
             let src = mesh.triangle_buffer.contents().as_ptr() as *const u8;
             unsafe {
@@ -152,23 +175,22 @@ pub fn build_combined_triangle_buffer(
     Some(total_tris as u32)
 }
 
-/// Build or refit the top-level acceleration structure from queued instances.
+/// Build or refit the top-level acceleration structure from resolved instances.
 /// When the set of instances (same mesh handles, same count) hasn't changed,
-/// refits in-place instead of doing a full rebuild — much faster for transform-only updates.
-pub fn build_tlas(
+/// refits in-place instead of doing a full rebuild.
+fn build_tlas(
     device: &ProtocolObject<dyn MTLDevice>,
     command_queue: &ProtocolObject<dyn MTLCommandQueue>,
     mesh_slotmap: &MeshSlotMap,
-    instances: &[PendingInstance],
-    tlas_store: &mut [Option<Retained<ProtocolObject<dyn MTLAccelerationStructure>>>; 2],
-    scratch_store: &mut [Option<Retained<ProtocolObject<dyn MTLBuffer>>>; 2],
-    buffer_index: &mut usize,
-    prev_instance_keys: &mut Vec<u32>,
+    instances: &[ResolvedInstance],
+    tlas_state: &mut TlasState,
 ) -> Option<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> {
     if instances.is_empty() {
-        prev_instance_keys.clear();
+        tlas_state.clear_instance_keys();
         return None;
     }
+
+    let (tlas_store, scratch_store, buffer_index, prev_instance_keys) = tlas_state.tlas_slots_mut();
 
     // Collect unique BLAS references and build instance descriptors
     let mut blas_list: Vec<(u32, &ProtocolObject<dyn MTLAccelerationStructure>)> = Vec::new();
@@ -213,7 +235,7 @@ pub fn build_tlas(
             None => continue,
         };
 
-        let m = &inst.instance.object_to_world.e;
+        let m = &inst.gpu.object_to_world.e;
         let transform = MTLPackedFloat4x3 {
             columns: [
                 MTLPackedFloat3 { x: m[0][0], y: m[1][0], z: m[2][0] },
@@ -249,16 +271,14 @@ pub fn build_tlas(
         tlas_desc.setInstanceDescriptorBufferOffset(0);
     }
     tlas_desc.setInstancedAccelerationStructures(Some(&blas_ns_array));
-
-    // Set Refit usage so the TLAS is built in a refit-compatible layout
     tlas_desc.setUsage(MTLAccelerationStructureUsage::Refit);
 
     if can_refit {
         // Refit in-place: update transforms without rebuilding
         let idx = *buffer_index;
-        let tlas = tlas_store[idx].as_ref()?;
+        let tlas_accel = tlas_store[idx].as_ref()?;
+        let tlas = tlas_accel.metal_accel();
 
-        // Refit needs scratch buffer sized for refit (usually smaller than build)
         let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
         let scratch_size = sizes.refitScratchBufferSize.max(64);
         let need_scratch = match &scratch_store[idx] {
@@ -279,7 +299,7 @@ pub fn build_tlas(
             encoder.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
                 tlas,
                 &tlas_desc,
-                None, // in-place refit
+                None,
                 Some(scratch),
                 0,
             );
@@ -288,8 +308,7 @@ pub fn build_tlas(
         cmd_buf.commit();
         cmd_buf.waitUntilCompleted();
 
-        // Keys unchanged, no need to update prev_instance_keys
-        Some(tlas.clone())
+        Some(tlas_accel.clone_retained())
     } else {
         // Full rebuild
         let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
@@ -298,21 +317,23 @@ pub fn build_tlas(
             return None;
         }
 
-        // Alternate buffer index for double-buffering
         let idx = *buffer_index;
         *buffer_index = 1 - idx;
 
-        // Allocate/reuse TLAS
         let need_realloc = match &tlas_store[idx] {
             Some(existing) => existing.size() < sizes.accelerationStructureSize,
             None => true,
         };
         if need_realloc {
-            tlas_store[idx] = device.newAccelerationStructureWithSize(sizes.accelerationStructureSize);
+            if let Some(new_accel) = device.newAccelerationStructureWithSize(sizes.accelerationStructureSize) {
+                tlas_store[idx] = Some(crate::gpu::accel::GpuAccelStructure::from_retained(new_accel));
+            } else {
+                return None;
+            }
         }
-        let tlas = tlas_store[idx].as_ref()?;
+        let tlas_accel = tlas_store[idx].as_ref()?;
+        let tlas = tlas_accel.metal_accel();
 
-        // Allocate/reuse scratch buffer
         let scratch_size = sizes.buildScratchBufferSize.max(64);
         let need_scratch = match &scratch_store[idx] {
             Some(existing) => existing.length() < scratch_size,
@@ -338,10 +359,9 @@ pub fn build_tlas(
         cmd_buf.commit();
         cmd_buf.waitUntilCompleted();
 
-        // Update keys for next frame's refit check
         *prev_instance_keys = current_keys;
 
-        Some(tlas.clone())
+        Some(tlas_accel.clone_retained())
     }
 }
 
@@ -375,25 +395,19 @@ pub fn ensure_output_texture(
     eprintln!("[Rust Metal] Raytrace output texture created: {}x{}", width, height);
 }
 
-/// Maximum number of texture slots for alpha cutout remap (slot 0 = no texture).
-const MAX_ALPHA_TEXTURE_SLOTS: usize = 31;
-
 /// Dispatch the raytracing compute shader.
 /// Uses pre-allocated FrameBuffers to avoid per-frame GPU allocations.
-pub fn dispatch_rays(
+pub fn dispatch(
     device: &ProtocolObject<dyn MTLDevice>,
     command_queue: &ProtocolObject<dyn MTLCommandQueue>,
     mesh_slotmap: &MeshSlotMap,
-    instances: &mut Vec<PendingInstance>,
+    instances: &[SceneInstance],
     camera: &Camera,
     render_width: u32,
     render_height: u32,
     compute_pipeline: &ProtocolObject<dyn MTLComputePipelineState>,
     output_texture: &ProtocolObject<dyn MTLTexture>,
-    tlas_store: &mut [Option<Retained<ProtocolObject<dyn MTLAccelerationStructure>>>; 2],
-    scratch_store: &mut [Option<Retained<ProtocolObject<dyn MTLBuffer>>>; 2],
-    tlas_buffer_index: &mut usize,
-    prev_instance_keys: &mut Vec<u32>,
+    tlas_state: &mut TlasState,
     lights: &[Light],
     material_edges: &[MaterialEdge],
     material_indices: &[u16],
@@ -407,87 +421,61 @@ pub fn dispatch_rays(
         return;
     }
 
-    // 1. Build combined triangle buffer (pre-allocated)
-    let total_tris = match build_combined_triangle_buffer(device, mesh_slotmap, instances, frame_buffers) {
+    // Frame counter for periodic diagnostics
+    static DISPATCH_FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let frame = DISPATCH_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    // 1. Resolve domain instances into GPU-ready instances
+    let (mut resolved, resolve_diag) = resolve_instances(instances, mesh_slotmap);
+    if resolved.is_empty() {
+        return;
+    }
+
+    // 2. Build combined triangle buffer (pre-allocated)
+    let total_tris = match build_combined_triangle_buffer(device, mesh_slotmap, &mut resolved, frame_buffers) {
         Some(count) => count,
         None => return,
     };
 
-    // 2. Build/refit TLAS
+    // 3. Build/refit TLAS
     let mut use_accel: u32 = 0;
-    let tlas = build_tlas(
-        device,
-        command_queue,
-        mesh_slotmap,
-        instances,
-        tlas_store,
-        scratch_store,
-        tlas_buffer_index,
-        prev_instance_keys,
-    );
+    let tlas = build_tlas(device, command_queue, mesh_slotmap, &resolved, tlas_state);
     if tlas.is_some() {
         use_accel = 1;
     }
 
-    // 3. Build texture remap for alpha cutout triangles
-    let rt_triangle_alpha_cutout: u32 = 1 << 29;
-    let rt_triangle_mei_mask: u32 = 0x1FFFFFFF;
-
-    let mut remap_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-    let mut remap_textures: Vec<(u32, &ProtocolObject<dyn MTLTexture>)> = Vec::new();
-    let mut next_slot: u32 = 1;
-
+    // 4. Build texture remap for alpha cutout triangles
     let combined_tri_buf = frame_buffers.combined_tri_buf.as_ref().unwrap();
     let combined_ptr = combined_tri_buf.contents().as_ptr() as *const Triangle;
-    for i in 0..total_tris as usize {
-        let tri = unsafe { &*combined_ptr.add(i) };
-        if (tri.material_edge_index & rt_triangle_alpha_cutout) == 0 {
-            continue;
-        }
-        let mei = (tri.material_edge_index & rt_triangle_mei_mask) as usize;
-        if mei >= material_edges.len() {
-            continue;
-        }
-        let edge = &material_edges[mei];
+    let triangles_slice = unsafe {
+        std::slice::from_raw_parts(combined_ptr, total_tris as usize)
+    };
 
-        let mat2_raw = edge.mat2;
-        let mat2_tex = (mat2_raw & 0x03FF) as usize;
-        let mat1_tex = edge.mat1 as usize;
-        let tmap_num = if mat2_tex > 0 { mat2_tex } else { mat1_tex };
+    let remap = texture_remap::build_texture_remap(
+        triangles_slice,
+        &resolved,
+        material_edges,
+        material_indices,
+        gpu_materials,
+        texture_slotmap,
+    );
 
-        if tmap_num >= material_indices.len() {
-            continue;
-        }
-        let mat_slot = material_indices[tmap_num] as usize;
-        if mat_slot >= gpu_materials.len() {
-            continue;
-        }
-        let albedo_idx = gpu_materials[mat_slot].albedo_index;
-        if albedo_idx == 0 {
-            continue;
-        }
-
-        if remap_map.contains_key(&albedo_idx) {
-            continue;
-        }
-
-        if let Some(tex) = texture_slotmap.find_by_index(albedo_idx) {
-            if next_slot < MAX_ALPHA_TEXTURE_SLOTS as u32 {
-                remap_map.insert(albedo_idx, next_slot);
-                remap_textures.push((albedo_idx, tex));
-                next_slot += 1;
-            }
-        }
+    // Periodic diagnostics (every 60 frames)
+    if frame % 60 == 0 {
+        let rd = &resolve_diag;
+        let td = &remap.diagnostics;
+        eprintln!(
+            "[Rust Metal] dispatch #{}: instances: {} level + {} billboard + {} rod ({} failed) | \
+             remap: {} cutout + {} override mapped, {} no_albedo, {} tex_missing, {} already_mapped, {}/{} slots",
+            frame,
+            rd.level_meshes, rd.billboards, rd.rods, rd.failed,
+            td.cutout_mapped, td.override_mapped,
+            td.override_no_albedo, td.override_tex_missing, td.override_already_mapped,
+            td.slots_used, super::texture_remap::MAX_ALPHA_TEXTURE_SLOTS,
+        );
     }
 
-    let max_remap_idx = remap_map.keys().copied().max().unwrap_or(0) as usize;
-    let remap_table_size = max_remap_idx + 1;
-    let mut remap_table: Vec<u32> = vec![0u32; remap_table_size.max(1)];
-    for (&albedo_idx, &slot) in &remap_map {
-        remap_table[albedo_idx as usize] = slot;
-    }
-
-    // 4. Fill scene constants
+    // 5. Fill scene constants
     let vfov_rad = camera.vfov * std::f32::consts::PI / 180.0;
     let scene = RaytraceSceneConstants {
         camera_position: camera.position,
@@ -502,16 +490,16 @@ pub fn dispatch_rays(
         aspect_ratio: render_width as f32 / render_height as f32,
         render_width,
         render_height,
-        instance_count: instances.len() as u32,
+        instance_count: resolved.len() as u32,
         total_triangles: total_tris,
         _pad4: [0.0; 2],
         debug_mode: 0,
-        texture_count: remap_textures.len() as u32,
+        texture_count: remap.textures.len() as u32,
         use_accel,
         light_count: lights.len() as u32,
     };
 
-    // 5. Write data into pre-allocated buffers
+    // 6. Write data into pre-allocated buffers
 
     // Scene constants (fixed size — allocate once)
     let scene_size = std::mem::size_of::<RaytraceSceneConstants>();
@@ -528,7 +516,7 @@ pub fn dispatch_rays(
     }
 
     // Instance buffer (variable size)
-    let instance_data: Vec<RaytraceInstance> = instances.iter().map(|p| p.instance).collect();
+    let instance_data: Vec<RaytraceInstance> = resolved.iter().map(|r| r.gpu).collect();
     let inst_size = std::mem::size_of::<RaytraceInstance>();
     if !crate::state::ensure_buffer_capacity(
         device,
@@ -618,7 +606,7 @@ pub fn dispatch_rays(
         device,
         &mut frame_buffers.remap_buf,
         &mut frame_buffers.remap_capacity,
-        remap_table.len(),
+        remap.remap_table.len(),
         remap_elem_size,
     ) {
         return;
@@ -626,9 +614,9 @@ pub fn dispatch_rays(
     let remap_buf = frame_buffers.remap_buf.as_ref().unwrap();
     unsafe {
         std::ptr::copy_nonoverlapping(
-            remap_table.as_ptr() as *const u8,
+            remap.remap_table.as_ptr() as *const u8,
             remap_buf.contents().as_ptr() as *mut u8,
-            remap_table.len() * remap_elem_size,
+            remap.remap_table.len() * remap_elem_size,
         );
     }
 
@@ -637,7 +625,7 @@ pub fn dispatch_rays(
         return;
     }
     let rs_buf = frame_buffers.remap_size_buf.as_ref().unwrap();
-    let remap_size = remap_table.len() as u32;
+    let remap_size = remap.remap_table.len() as u32;
     unsafe {
         std::ptr::copy_nonoverlapping(
             &remap_size as *const u32 as *const u8,
@@ -646,7 +634,7 @@ pub fn dispatch_rays(
         );
     }
 
-    // 6. Dispatch compute
+    // 7. Dispatch compute
     let cmd_buf = match command_queue.commandBuffer() {
         Some(b) => b,
         None => return,
@@ -721,7 +709,7 @@ pub fn dispatch_rays(
             encoder.setTexture_atIndex(Some(white_tex), 16);
         }
     }
-    for (i, (_albedo_idx, tex)) in remap_textures.iter().enumerate() {
+    for (i, (_albedo_idx, tex)) in remap.textures.iter().enumerate() {
         unsafe {
             encoder.setTexture_atIndex(Some(*tex), 17 + i);
         }

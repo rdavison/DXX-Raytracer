@@ -82,6 +82,7 @@ struct Light {
 
 constant uint RT_TRIANGLE_ALPHA_CUTOUT = (1u << 29);
 constant uint RT_TRIANGLE_MEI_MASK     = 0x1FFFFFFFu;
+constant uint RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE = 0xFFFFu;
 constant uint RT_MAT2_DOOR_SHIFT       = 10;
 constant uint RT_MAT2_DOOR_MASK        = 0x3C00u;  // bits 10-13
 constant uint RT_MAT2_ORIENT_SHIFT     = 14;
@@ -163,6 +164,31 @@ bool should_skip_cutout(
     // grate bars have alpha=1.0. Only treat actual holes as transparent.
     float alpha = alpha_textures[slot].sample(tex_sampler, sample_uv).a;
     return alpha < 0.1;
+}
+
+// Check if a ray should skip this triangle (billboard/rod with transparent pixel).
+// Returns true if the ray should pass through.
+bool should_skip_material_override(
+    uint mei_raw,
+    float2 hit_uv,
+    uint material_override_val,
+    constant GPUMaterial* gpu_materials,
+    constant uint* texture_remap,
+    constant uint& remap_table_size,
+    array<texture2d<float, access::sample>, 32> alpha_textures,
+    sampler tex_sampler)
+{
+    if (mei_raw != RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) return false;
+    if (material_override_val == 0u) return false;
+
+    uint albedo_idx = gpu_materials[material_override_val].albedo_index;
+    if (albedo_idx == 0u || albedo_idx >= remap_table_size) return false;
+
+    uint slot = texture_remap[albedo_idx];
+    if (slot == 0u) return false;
+
+    float4 sampled = alpha_textures[slot].sample(tex_sampler, hit_uv);
+    return sampled.a < 0.1;
 }
 
 // ============================================================================
@@ -345,6 +371,14 @@ kernel void raytrace_main(
                 continue;
             }
 
+            // Skip transparent pixels on billboard/rod overrides
+            if (should_skip_material_override(tri.material_edge_index, hit_uv,
+                    inst.material_override, gpu_materials,
+                    texture_remap, remap_table_size, alpha_textures, tex_sampler)) {
+                r.origin = r.origin + r.direction * (intersection.distance + 0.002);
+                continue;
+            }
+
             // Solid hit
             hit_inst_id = inst_id;
             hit_prim_id = prim_id;
@@ -382,6 +416,26 @@ kernel void raytrace_main(
             float4 inst_color = decode_color(inst.color);
             float3 albedo = (vert_color * inst_color).rgb;
 
+            // Billboard/rod overrides are emissive (self-lit, no lighting)
+            if (tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
+                // Interpolate UV at hit point
+                float2 uv = float2(tri.uv0) * w0 + float2(tri.uv1) * hit_bary.x + float2(tri.uv2) * hit_bary.y;
+
+                float3 tex_color = albedo;  // fallback: vertex * instance color
+                if (inst.material_override > 0u) {
+                    // material_override is a bitmap index — use directly into gpu_materials[]
+                    uint albedo_idx = gpu_materials[inst.material_override].albedo_index;
+                    if (albedo_idx > 0u && albedo_idx < remap_table_size) {
+                        uint slot = texture_remap[albedo_idx];
+                        if (slot > 0u) {
+                            float4 sampled = alpha_textures[slot].sample(tex_sampler, uv);
+                            tex_color = sampled.rgb * inst_color.rgb;
+                        }
+                    }
+                }
+                float3 ldr = LinearTosRGB(tex_color);
+                final_color = float4(ldr, 1.0);
+            } else {
             float3 total_light = float3(0.0);
 
             if (scene.light_count > 0) {
@@ -441,6 +495,14 @@ kernel void raytrace_main(
                             continue;
                         }
 
+                        // Skip transparent pixels on billboard/rod overrides for shadow rays
+                        if (should_skip_material_override(s_tri.material_edge_index, s_hit_uv,
+                                s_inst.material_override, gpu_materials,
+                                texture_remap, remap_table_size, alpha_textures, tex_sampler)) {
+                            shadow_ray.origin = shadow_ray.origin + shadow_ray.direction * (shadow_hit.distance + 0.002);
+                            continue;
+                        }
+
                         visibility = 0.0;
                         break;
                     }
@@ -460,6 +522,7 @@ kernel void raytrace_main(
             float3 ldr = ApplyTonemappingCurve(hdr);
             ldr = LinearTosRGB(ldr);
             final_color = float4(ldr, 1.0);
+            } // end else (non-emissive lighting)
         }
     } else {
         // Brute-force fallback (no shadow rays without TLAS)
@@ -488,12 +551,32 @@ kernel void raytrace_main(
             float4 inst_color = decode_color(inst.color);
             float4 base_color = vert_color * inst_color;
 
-            // Directional light fallback
-            float3 light_dir = normalize(float3(0.3, 1.0, 0.5));
-            float NdotL = max(dot(normal_world, light_dir), 0.0);
-            float ambient = 0.15;
+            // Billboard/rod overrides are emissive (self-lit, no lighting)
+            if (tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
+                float2 uv = float2(tri.uv0) * w0 + float2(tri.uv1) * hit.u + float2(tri.uv2) * hit.v;
 
-            final_color = float4(base_color.rgb * (ambient + 0.85 * NdotL), 1.0);
+                float3 tex_color = base_color.rgb;  // fallback: vertex * instance color
+                if (inst.material_override > 0u) {
+                    // material_override is a bitmap index — use directly into gpu_materials[]
+                    uint albedo_idx = gpu_materials[inst.material_override].albedo_index;
+                    if (albedo_idx > 0u && albedo_idx < remap_table_size) {
+                        uint slot = texture_remap[albedo_idx];
+                        if (slot > 0u) {
+                            float4 sampled = alpha_textures[slot].sample(tex_sampler, uv);
+                            tex_color = sampled.rgb * inst_color.rgb;
+                        }
+                    }
+                }
+                float3 ldr = LinearTosRGB(tex_color);
+                final_color = float4(ldr, 1.0);
+            } else {
+                // Directional light fallback
+                float3 light_dir = normalize(float3(0.3, 1.0, 0.5));
+                float NdotL = max(dot(normal_world, light_dir), 0.0);
+                float ambient = 0.15;
+
+                final_color = float4(base_color.rgb * (ambient + 0.85 * NdotL), 1.0);
+            }
         }
     }
 

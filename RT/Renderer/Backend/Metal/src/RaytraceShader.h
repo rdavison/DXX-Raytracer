@@ -15,7 +15,37 @@ using namespace raytracing;
 #define RT_TRIANGLE_ALPHA_CUTOUT         (1u << 29)
 #define RT_TRIANGLE_MEI_MASK             0x1FFFFFFFu  // mask out flag bits 29-31
 #define RT_MAX_TEXTURES 6030
+#define RT_MAX_MATERIAL_EDGES 54000  // RT_MAX_SEGMENTS * RT_SIDES_PER_SEGMENT
 #define RT_MATERIAL_FLAG_ALPHA_CUTOUT    0x10
+
+// mat2 encoding constants (must match Renderer.h)
+#define RT_MAT2_TMAP_MASK      0x03FFu  // bits 0-9: texture index (0-1023)
+#define RT_MAT2_DOOR_SHIFT     10u
+#define RT_MAT2_DOOR_MASK      0x3C00u  // bits 10-13: door openness (0-15)
+#define RT_MAT2_ORIENT_SHIFT   14u
+#define RT_MAT2_ORIENT_MASK    0xC000u  // bits 14-15: orientation
+
+// Unpacked material edge data for shader use
+struct MaterialEdgeData {
+    uint mat1;         // base texture index
+    uint tmap2;        // overlay texture index (bits 0-9 of mat2)
+    uint door_openness;// door animation state (bits 10-13 of mat2), 0-15
+    uint orientation;  // overlay rotation (bits 14-15 of mat2)
+};
+
+// Read and decode a material edge from the packed array
+MaterialEdgeData read_material_edge(constant uint* material_edges, uint mei) {
+    uint edge = material_edges[mei];
+    uint mat1 = edge & 0xFFFF;
+    uint mat2_raw = (edge >> 16) & 0xFFFF;
+
+    MaterialEdgeData data;
+    data.mat1 = mat1;
+    data.tmap2 = mat2_raw & RT_MAT2_TMAP_MASK;
+    data.door_openness = (mat2_raw & RT_MAT2_DOOR_MASK) >> RT_MAT2_DOOR_SHIFT;
+    data.orientation = (mat2_raw & RT_MAT2_ORIENT_MASK) >> RT_MAT2_ORIENT_SHIFT;
+    return data;
+}
 
 struct Triangle {
     packed_float3 pos0;
@@ -129,7 +159,8 @@ uint resolve_material_index(uint material_edge_index, uint material_override,
     }
 
     // Normal case: mask out flag bits, look up in material_edges, then material_indices
-    uint edge = material_edges[material_edge_index & RT_TRIANGLE_MEI_MASK];
+    uint mei = material_edge_index & RT_TRIANGLE_MEI_MASK;
+    uint edge = material_edges[mei];
     uint mat1 = edge & 0xFFFF;
     return get_material_index(material_indices, mat1);
 }
@@ -227,7 +258,13 @@ float4 sample_texture_by_index(uint tex_idx,
 #define SAMPLE_TEXTURE(tex_idx, uv) sample_texture_by_index(tex_idx, uv, texture_remap, textures, tex_sampler)
 #endif
 
-// Check whether a ray should skip this hit due to alpha cutout transparency.
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// O ray of light, shouldst thou pass through this veil?
+// When grate or door doth block thy radiant trail,
+// Sample the alpha with a gentle hand,
+// And pierce the void where transparency doth stand.
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 bool should_skip_cutout(uint mei_raw,
                         float2 uv,
                         constant uint* material_edges,
@@ -240,25 +277,31 @@ bool should_skip_cutout(uint mei_raw,
                         array<texture2d<float>, MAX_BOUND_TEXTURES> textures,
 #endif
                         sampler tex_sampler) {
+    // Only cutout triangles may be skipped
     bool is_cutout = (mei_raw & RT_TRIANGLE_ALPHA_CUTOUT) != 0;
     if (!is_cutout) return false;
     if (mei_raw & (RT_TRIANGLE_HOLDS_MATERIAL_INDEX | RT_TRIANGLE_HOLDS_MATERIAL_EDGE)) return false;
 
     uint mei = mei_raw & RT_TRIANGLE_MEI_MASK;
-    uint edge = material_edges[mei];
-    uint mat2_tmap = (edge >> 16) & 0x3FFF;
+    MaterialEdgeData edge = read_material_edge(material_edges, mei);
 
-    if (mat2_tmap != 0) {
-        uint mat2_idx = get_material_index(material_indices, mat2_tmap);
+    // When door is opening, make it fully transparent (rays pass through)
+    if (edge.door_openness > 0) {
+        return true;
+    }
+
+    // Check texture alpha for grates and other transparent surfaces
+    if (edge.tmap2 != 0) {
+        // Has overlay texture - check overlay alpha
+        uint mat2_idx = get_material_index(material_indices, edge.tmap2);
         mat2_idx = min(mat2_idx, (uint)(RT_MAX_TEXTURES - 1));
         uint tex2 = materials[mat2_idx].albedo_index;
-        uint orient = (edge >> 30) & 3;
-        float2 uv_rot = rotate_overlay_uv(uv, orient);
+        float2 uv_rot = rotate_overlay_uv(uv, edge.orientation);
         float4 s = SAMPLE_TEXTURE(tex2, uv_rot);
         if (s.a < 0.1) return true;
     } else {
-        uint mat1 = edge & 0xFFFF;
-        uint mat1_idx = get_material_index(material_indices, mat1);
+        // No overlay - check base texture alpha
+        uint mat1_idx = get_material_index(material_indices, edge.mat1);
         mat1_idx = min(mat1_idx, (uint)(RT_MAX_TEXTURES - 1));
         uint tex1 = materials[mat1_idx].albedo_index;
         float4 s = SAMPLE_TEXTURE(tex1, uv);
@@ -286,13 +329,12 @@ OverlayInfo resolve_overlay(uint material_edge_index,
     if (material_override != 0) return info;
     if (material_edge_index & (RT_TRIANGLE_HOLDS_MATERIAL_INDEX | RT_TRIANGLE_HOLDS_MATERIAL_EDGE)) return info;
 
-    uint edge = material_edges[material_edge_index & RT_TRIANGLE_MEI_MASK];
-    uint mat2_tmap = (edge >> 16) & 0x3FFF;
-    if (mat2_tmap != 0) {
-        uint orient = (edge >> 30) & 3;
-        info.mat_idx = get_material_index(material_indices, mat2_tmap);
+    uint mei = material_edge_index & RT_TRIANGLE_MEI_MASK;
+    MaterialEdgeData edge = read_material_edge(material_edges, mei);
+    if (edge.tmap2 != 0) {
+        info.mat_idx = get_material_index(material_indices, edge.tmap2);
         info.mat_idx = min(info.mat_idx, (uint)(RT_MAX_TEXTURES - 1));
-        info.uv = rotate_overlay_uv(base_uv, orient);
+        info.uv = rotate_overlay_uv(base_uv, edge.orientation);
     }
     return info;
 }
@@ -515,21 +557,19 @@ kernel void raytrace_main(
                 albedo = float4(0.5, 0.0, 0.0, 1.0); // Dark red = special triangle type
             } else {
                 uint dbg_mei = dbg_mei_raw & RT_TRIANGLE_MEI_MASK;
-                uint dbg_edge = material_edges[dbg_mei];
-                uint dbg_mat2_tmap = (dbg_edge >> 16) & 0x3FFF;
-                if (dbg_mat2_tmap == 0) {
+                MaterialEdgeData dbg_edge = read_material_edge(material_edges, dbg_mei);
+                if (dbg_edge.tmap2 == 0) {
                     albedo = float4(0.3, 0.0, 0.0, 1.0); // Dark red = no overlay
                 } else if (!dbg_cutout) {
                     albedo = float4(0.8, 0.0, 0.8, 1.0); // Magenta = overlay but NOT cutout side
                 } else {
-                    uint dbg_mat2_idx = get_material_index(material_indices, dbg_mat2_tmap);
+                    uint dbg_mat2_idx = get_material_index(material_indices, dbg_edge.tmap2);
                     constant Material& dbg_mat2 = materials[min(dbg_mat2_idx, (uint)(RT_MAX_TEXTURES - 1))];
                     uint dbg_tex2 = dbg_mat2.albedo_index;
                     if (dbg_tex2 == 0 || dbg_tex2 >= RT_MAX_TEXTURES) {
                         albedo = float4(1.0, 1.0, 0.0, 1.0); // Yellow = overlay but no albedo texture
                     } else {
-                        uint dbg_orient = (dbg_edge >> 30) & 3;
-                        float2 dbg_uv_rot = rotate_overlay_uv(hit_uv, dbg_orient);
+                        float2 dbg_uv_rot = rotate_overlay_uv(hit_uv, dbg_edge.orientation);
                         float4 dbg_sample = SAMPLE_TEXTURE(dbg_tex2, dbg_uv_rot);
                         if (dbg_sample.a > 0 || dbg_sample.r > 0 || dbg_sample.g > 0 || dbg_sample.b > 0) {
                             albedo = float4(0.0, dbg_sample.a, dbg_sample.a * 0.5, 1.0); // Green=alpha
@@ -545,14 +585,12 @@ kernel void raytrace_main(
             bool dbg4_cutout = (hit_material_index & RT_TRIANGLE_ALPHA_CUTOUT) != 0;
             if (dbg4_cutout && !(hit_material_index & (RT_TRIANGLE_HOLDS_MATERIAL_INDEX | RT_TRIANGLE_HOLDS_MATERIAL_EDGE))) {
                 uint dbg4_mei = hit_material_index & RT_TRIANGLE_MEI_MASK;
-                uint dbg4_edge = material_edges[dbg4_mei];
-                uint dbg4_mat2_tmap = (dbg4_edge >> 16) & 0x3FFF;
-                if (dbg4_mat2_tmap != 0) {
-                    uint dbg4_mat2_idx = get_material_index(material_indices, dbg4_mat2_tmap);
+                MaterialEdgeData dbg4_edge = read_material_edge(material_edges, dbg4_mei);
+                if (dbg4_edge.tmap2 != 0) {
+                    uint dbg4_mat2_idx = get_material_index(material_indices, dbg4_edge.tmap2);
                     constant Material& dbg4_mat2 = materials[min(dbg4_mat2_idx, (uint)(RT_MAX_TEXTURES - 1))];
                     uint dbg4_tex2 = dbg4_mat2.albedo_index;
-                    uint dbg4_orient = (dbg4_edge >> 30) & 3;
-                    float2 dbg4_uv = rotate_overlay_uv(hit_uv, dbg4_orient);
+                    float2 dbg4_uv = rotate_overlay_uv(hit_uv, dbg4_edge.orientation);
                     float4 dbg4_sample = SAMPLE_TEXTURE(dbg4_tex2, dbg4_uv);
                     float4 dbg4_base = SAMPLE_TEXTURE(tex_idx, hit_uv);
                     float base_ok = (dbg4_base.a > 0 || dbg4_base.r > 0) ? 1.0 : 0.0;
@@ -575,6 +613,25 @@ kernel void raytrace_main(
                         albedo.rgb = overlay_color.rgb * hit_color.rgb;
                     }
                 }
+            }
+        }
+        else if (scene.debug_mode == 5) {
+            // Debug mode 5: Show door_openness ONLY for ALL triangles
+            // Pure white = fully open (15), pure black = closed (0)
+            // Non-door walls = dark gray (0.1)
+            uint dbg5_mei = hit_material_index & RT_TRIANGLE_MEI_MASK;
+            if (!(hit_material_index & (RT_TRIANGLE_HOLDS_MATERIAL_INDEX | RT_TRIANGLE_HOLDS_MATERIAL_EDGE)) &&
+                dbg5_mei < RT_MAX_MATERIAL_EDGES) {
+                MaterialEdgeData dbg5_edge = read_material_edge(material_edges, dbg5_mei);
+                float door_vis = float(dbg5_edge.door_openness) / 15.0;
+                // Cyan for doors with openness > 0, white for openness value
+                if (dbg5_edge.door_openness > 0) {
+                    albedo = float4(0.0, door_vis, door_vis, 1.0);  // Cyan - very visible
+                } else {
+                    albedo = float4(0.1, 0.1, 0.1, 1.0);  // Dark gray for closed/non-door
+                }
+            } else {
+                albedo = float4(0.2, 0.0, 0.0, 1.0);  // Dark red for special triangles
             }
         }
         else {

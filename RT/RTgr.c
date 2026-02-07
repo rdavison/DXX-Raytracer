@@ -7,6 +7,7 @@
 #include "palette.h"
 #include "3d.h"
 #include "segment.h"
+#include "wall.h"
 #include "maths.h"
 #include "dxxerror.h"
 #include "polyobj.h"
@@ -312,9 +313,84 @@ void gr_palette_step_up(int r, int g, int b)
 	io->screen_overlay_color = screen_flash_color;
 }
 
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// O gentle door, how wide dost thou stand?
+// Like morning mist that parts o'er meadow land,
+// From shuttered close (where zero sheep may pass)
+// To open wide (fifteen) through verdant grass.
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+static uint8_t RT_GetDoorOpenness(wall *w)
+{
+	if (!w || w->type != WALL_DOOR)
+		return 0;
+
+	int wall_idx = (int)(w - Walls);
+
+	// Check door state
+	switch (w->state) {
+		case WALL_DOOR_CLOSED:
+			return 0;
+		case WALL_DOOR_WAITING:  // Fully open, waiting to close
+			return 15;
+		case WALL_DOOR_OPENING:
+		case WALL_DOOR_CLOSING:
+			break;  // Need to calculate from animation
+		default:
+			return 0;
+	}
+
+	// Find the ActiveDoor for this wall to get animation progress
+	for (int i = 0; i < Num_open_doors; i++) {
+		active_door *d = &ActiveDoors[i];
+		// Check if this door matches our wall
+		if (d->front_wallnum[0] == wall_idx ||
+			d->back_wallnum[0] == wall_idx ||
+			(d->n_parts == 2 && (d->front_wallnum[1] == wall_idx ||
+								 d->back_wallnum[1] == wall_idx))) {
+			// Found it - calculate openness from time (0-15 scale)
+			wclip *anim = &WallAnims[w->clip_num];
+			if (anim->play_time <= 0)
+				return 8;  // Default to half-open if no animation time
+
+			fix progress = (d->time * 15) / anim->play_time;
+			if (progress > 15) progress = 15;
+			if (progress < 0) progress = 0;
+
+			uint8_t openness;
+			// For closing doors, invert the openness
+			if (w->state == WALL_DOOR_CLOSING)
+				openness = (uint8_t)(15 - progress);
+			else
+				openness = (uint8_t)progress;
+
+			return openness;
+		}
+	}
+
+	// Door is animating but not found in ActiveDoors - assume half open
+	printf("[DOOR] Wall %d state=%d NOT FOUND in ActiveDoors (Num_open_doors=%d)\n",
+		wall_idx, w->state, Num_open_doors);
+	fflush(stdout);
+	return 8;
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Traverse the segments, those rolling hills of code,
+// Where each side tells a tale of texture sowed.
+// Simple and pure, like sheep upon the lea,
+// We copy textures as they're meant to be.
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Through twilight fields where segments gently roam,
+// We gather edges, guiding each ray home.
+// The mat2 we weave with care and steady hand:
+// Texture, openness, and orientation, all as planned.
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 void RT_UpdateMaterialEdges(void)
 {
 	RT_MaterialEdge* g_rt_material_edges = RT_GetMaterialEdgesArray();
+	static int debug_frame = 0;
+	debug_frame++;
 
 	for (int segment_index = 0; segment_index < Num_segments; segment_index++)
 	{
@@ -328,7 +404,38 @@ void RT_UpdateMaterialEdges(void)
 
 			RT_MaterialEdge* side_edge = &g_rt_material_edges[absolute_side_index];
 			side_edge->mat1 = sd->tmap_num;
-			side_edge->mat2 = sd->tmap_num2;
+
+			// Decode original tmap_num2: bits 0-13 = texture, bits 14-15 = orientation
+			uint16_t original_tmap2 = sd->tmap_num2;
+			uint16_t texture_idx = original_tmap2 & 0x3FFF;       // bits 0-13
+			uint16_t orientation = (original_tmap2 >> 14) & 0x3;  // bits 14-15
+
+			// Get door openness (0-15) if this side has a door wall
+			uint8_t door_openness = 0;
+			int wall_num = sd->wall_num;
+			if (wall_num >= 0 && wall_num < MAX_WALLS) {
+				wall* w = &Walls[wall_num];
+				if (w->type == WALL_DOOR) {
+					door_openness = RT_GetDoorOpenness(w);
+					// Debug: log when door is animating
+					if (door_openness > 0 && (debug_frame % 30) == 0) {
+						printf("[DOOR] wall %d state=%d openness=%d\n",
+							wall_num, w->state, door_openness);
+						fflush(stdout);
+					}
+				}
+			}
+
+			// Re-encode mat2 with our layout:
+			// bits 0-9: texture index (truncate to 1023 max)
+			// bits 10-13: door openness (0-15)
+			// bits 14-15: orientation
+			if (texture_idx > RT_MAT2_TMAP_MASK) {
+				texture_idx = texture_idx & RT_MAT2_TMAP_MASK;  // Truncate, may cause issues
+			}
+			side_edge->mat2 = (texture_idx & RT_MAT2_TMAP_MASK) |
+							  ((door_openness << RT_MAT2_DOOR_SHIFT) & RT_MAT2_DOOR_MASK) |
+							  ((orientation << RT_MAT2_ORIENT_SHIFT) & RT_MAT2_ORIENT_MASK);
 		}
 	}
 }

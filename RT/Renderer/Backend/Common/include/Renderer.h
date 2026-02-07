@@ -42,8 +42,16 @@ typedef struct RT_Config RT_Config;
 typedef struct RT_MaterialEdge
 {
 	uint16_t mat1; // equivalent to tmap_num1
-	uint16_t mat2; // equivalent to tmap_num2
+	// mat2 layout: bits 0-9 = tmap_num2 (up to 1024), bits 10-13 = door_openness (0-15), bits 14-15 = orientation
+	uint16_t mat2;
 } RT_MaterialEdge;
+
+// Helper macros for mat2 encoding
+#define RT_MAT2_TMAP_MASK      0x03FF  // bits 0-9: texture index (0-1023)
+#define RT_MAT2_DOOR_SHIFT     10
+#define RT_MAT2_DOOR_MASK      0x3C00  // bits 10-13: door openness (0-15)
+#define RT_MAT2_ORIENT_SHIFT   14
+#define RT_MAT2_ORIENT_MASK    0xC000  // bits 14-15: orientation
 
 typedef struct RT_Camera
 {

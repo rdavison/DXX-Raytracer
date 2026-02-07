@@ -52,6 +52,46 @@ set(Graphic_Includes
 set (Graphic_Libs
 Renderer
 )
+elseif(${GRAPHICS_API} STREQUAL "Zig")
+set(Graphic_Includes
+	"$ENV{RT_EXT_CODE_DIR}/RTgr.c"
+	"$ENV{RT_EXT_CODE_DIR}/RTgr.h"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Level.h"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Level.c"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Lights.h"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Lights.c"
+	"$ENV{RT_EXT_CODE_DIR}/metal_bridge.c"
+	"$ENV{RT_EXT_CODE_DIR}/metal_bridge.h"
+	"$ENV{RT_EXT_CODE_DIR}/polymodel_viewer.cpp"
+	"$ENV{RT_EXT_CODE_DIR}/polymodel_viewer.h"
+	"$ENV{RT_EXT_CODE_DIR}/material_viewer.cpp"
+	"$ENV{RT_EXT_CODE_DIR}/material_viewer.h"
+	"$ENV{RT_EXT_CODE_DIR}/RTmaterials.c"
+	"$ENV{RT_EXT_CODE_DIR}/RTmaterials.h"
+)
+set (Graphic_Libs
+Renderer
+)
+elseif(${GRAPHICS_API} STREQUAL "Rust")
+set(Graphic_Includes
+	"$ENV{RT_EXT_CODE_DIR}/RTgr.c"
+	"$ENV{RT_EXT_CODE_DIR}/RTgr.h"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Level.h"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Level.c"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Lights.h"
+	"$ENV{RT_EXT_CODE_DIR}/Game/Lights.c"
+	"$ENV{RT_EXT_CODE_DIR}/metal_bridge.c"
+	"$ENV{RT_EXT_CODE_DIR}/metal_bridge.h"
+	"$ENV{RT_EXT_CODE_DIR}/polymodel_viewer.cpp"
+	"$ENV{RT_EXT_CODE_DIR}/polymodel_viewer.h"
+	"$ENV{RT_EXT_CODE_DIR}/material_viewer.cpp"
+	"$ENV{RT_EXT_CODE_DIR}/material_viewer.h"
+	"$ENV{RT_EXT_CODE_DIR}/RTmaterials.c"
+	"$ENV{RT_EXT_CODE_DIR}/RTmaterials.h"
+)
+set (Graphic_Libs
+Renderer
+)
 elseif(${GRAPHICS_API} STREQUAL "OpenGL")
 set(Graphic_Includes
 	"arch/ogl/gr.c"
@@ -73,7 +113,7 @@ file(GLOB UI_SOURCES
 )
 endif()
 
-if(APPLE AND ${GRAPHICS_API} STREQUAL "Metal")
+if(APPLE AND (${GRAPHICS_API} STREQUAL "Metal" OR ${GRAPHICS_API} STREQUAL "Zig"))
 # PhysFS forces CMAKE_SKIP_RPATH on; re-enable for the Metal dylib.
 set(CMAKE_SKIP_RPATH OFF CACHE BOOL "Skip RPATH" FORCE)
 endif()
@@ -90,6 +130,13 @@ set_target_properties(descent1 PROPERTIES
 	BUILD_RPATH "@loader_path/../RT/Renderer/Backend/Metal")
 target_link_options(descent1 PRIVATE
 	"-Wl,-rpath,@loader_path/../RT/Renderer/Backend/Metal")
+endif()
+
+if(APPLE AND ${GRAPHICS_API} STREQUAL "Zig")
+set_target_properties(descent1 PROPERTIES
+	BUILD_RPATH "@loader_path/../RT/Renderer/Backend/Zig/zig-out/lib")
+target_link_options(descent1 PRIVATE
+	"-Wl,-rpath,@loader_path/../RT/Renderer/Backend/Zig/zig-out/lib")
 endif()
 
 target_sources(descent1 PRIVATE

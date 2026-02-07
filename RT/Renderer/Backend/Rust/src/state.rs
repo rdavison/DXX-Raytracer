@@ -8,15 +8,16 @@ use std::ffi::c_void;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLAccelerationStructure, MTLBuffer, MTLCommandQueue, MTLComputePipelineState,
+    MTLBuffer, MTLCommandQueue, MTLComputePipelineState,
     MTLDevice, MTLRenderPipelineState, MTLResourceOptions, MTLSamplerState, MTLTexture,
 };
 use objc2_quartz_core::CAMetalLayer;
 
 use crate::device::DeviceState;
+use crate::domain::{MeshHandle, SceneInstance};
+use crate::gpu::accel::TlasState;
 use crate::mesh::MeshSlotMap;
-use crate::raster::RasterBatch;
-use crate::raytrace::PendingInstance;
+use crate::renderer::raster::RasterBatch;
 use crate::texture::TextureSlotMap;
 use crate::types::*;
 use crate::types::Light;
@@ -160,18 +161,16 @@ pub struct MetalState {
     pub raster_lines: Vec<RasterLineVertex>,
     pub viewport: (f32, f32, f32, f32),
 
-    // Raytracing (Phase 3A)
+    // Raytracing
     pub mesh_slotmap: MeshSlotMap,
-    pub raytrace_instances: Vec<PendingInstance>,
+    pub raytrace_instances: Vec<SceneInstance>,
     pub raytrace_output_texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     pub raytrace_output_w: u32,
     pub raytrace_output_h: u32,
     pub raytrace_output_handle: ResourceHandle,
     pub compute_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub camera: Camera,
-    pub tlas: [Option<Retained<ProtocolObject<dyn MTLAccelerationStructure>>>; 2],
-    pub tlas_scratch: [Option<Retained<ProtocolObject<dyn MTLBuffer>>>; 2],
-    pub tlas_buffer_index: usize,
+    pub tlas_state: TlasState,
     pub render_width: u32,
     pub render_height: u32,
     pub render_blit: bool,
@@ -188,8 +187,9 @@ pub struct MetalState {
     // Cached raytrace sampler (created once at init)
     pub raytrace_sampler: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
 
-    // Previous frame's instance keys for TLAS refit detection
-    pub prev_instance_keys: Vec<u32>,
+    // Billboard quad mesh (unit quad, created once at init).
+    // `Some` guarantees the mesh exists in the slotmap.
+    pub billboard_mesh: Option<MeshHandle>,
 }
 
 // SAFETY: Renderer is only called from the game's main thread.
@@ -228,7 +228,7 @@ pub fn init(device_state: DeviceState) {
         raster_lines: Vec::new(),
         viewport: (0.0, 0.0, 640.0, 480.0),
 
-        // Raytracing (Phase 3A)
+        // Raytracing
         mesh_slotmap: MeshSlotMap::new(),
         raytrace_instances: Vec::new(),
         raytrace_output_texture: None,
@@ -237,9 +237,7 @@ pub fn init(device_state: DeviceState) {
         raytrace_output_handle: ResourceHandle::NULL,
         compute_pipeline: None,
         camera: Camera::default(),
-        tlas: [None, None],
-        tlas_scratch: [None, None],
-        tlas_buffer_index: 0,
+        tlas_state: TlasState::new(),
         render_width: 640,
         render_height: 480,
         render_blit: false,
@@ -256,8 +254,8 @@ pub fn init(device_state: DeviceState) {
         // Cached raytrace sampler (created in RT_RendererInit after pipeline setup)
         raytrace_sampler: None,
 
-        // TLAS refit tracking
-        prev_instance_keys: Vec::new(),
+        // Billboard quad mesh (created after compute pipeline in RT_RendererInit)
+        billboard_mesh: None,
     };
 
     unsafe {

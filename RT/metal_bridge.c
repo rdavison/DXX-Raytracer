@@ -1011,8 +1011,10 @@ uint32_t* metal_load_bitmap_pixel_data(RT_Arena* arena, grs_bitmap* bitmap)
 					(*(dst_ptr++)) = 255;
 					(*(dst_ptr++)) = 0; // transparent pixel
 				}
-				else if ((c == 255 && (bitmap->bm_flags & BM_FLAG_TRANSPARENT)) || c == 256)
+				else if (c == 255 || c == 256)
 				{
+					// Palette index 255 is the standard transparent color in Descent.
+					// Always treat it as transparent so door animations work correctly.
 					(*(dst_ptr++)) = 0;
 					(*(dst_ptr++)) = 0;
 					(*(dst_ptr++)) = 0;

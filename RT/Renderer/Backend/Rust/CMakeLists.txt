@@ -42,10 +42,12 @@ add_custom_command(
         ${RUST_SOURCE_DIR}/src/shaders.rs
         ${RUST_SOURCE_DIR}/src/pipeline.rs
         ${RUST_SOURCE_DIR}/src/texture.rs
-        ${RUST_SOURCE_DIR}/src/raster.rs
         ${RUST_SOURCE_DIR}/src/mesh.rs
-        ${RUST_SOURCE_DIR}/src/raytrace.rs
         ${RUST_SOURCE_DIR}/src/raytrace_shader.rs
+        ${RUST_SOURCE_DIR}/src/renderer/mod.rs
+        ${RUST_SOURCE_DIR}/src/renderer/raytrace.rs
+        ${RUST_SOURCE_DIR}/src/renderer/raster.rs
+        ${RUST_SOURCE_DIR}/src/renderer/texture_remap.rs
     COMMENT "Building Rust Renderer library (${CARGO_PROFILE})"
 )
 

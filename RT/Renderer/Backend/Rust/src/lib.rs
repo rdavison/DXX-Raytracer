@@ -5,11 +5,12 @@
 //! Phase 2: 2D raster pipeline, texture upload, menu/HUD rendering.
 
 mod device;
+mod domain;
+mod gpu;
 mod mesh;
 mod pipeline;
-mod raster;
-mod raytrace;
 mod raytrace_shader;
+mod renderer;
 mod shaders;
 mod state;
 mod texture;
@@ -29,6 +30,8 @@ use objc2_quartz_core::CAMetalDrawable;
 
 use state::{dispatch_semaphore_signal, dispatch_semaphore_wait, DISPATCH_TIME_FOREVER};
 use types::*;
+
+use domain::{BitmapIndex, MeshHandle, SceneConfig, SceneInstance, RGBA8};
 
 // ============================================================================
 // Renderer constants (matching Renderer.h)
@@ -102,6 +105,54 @@ pub extern "C" fn RT_RendererInit(params: *const RendererInitParams) {
         eprintln!("[Rust Metal] Raytrace sampler created");
     }
 
+    // Create billboard quad mesh (unit quad, 2 triangles)
+    {
+        let v0 = Vec3 { x: -1.0, y: -1.0, z: 0.0 };
+        let v1 = Vec3 { x:  1.0, y: -1.0, z: 0.0 };
+        let v2 = Vec3 { x:  1.0, y:  1.0, z: 0.0 };
+        let v3 = Vec3 { x: -1.0, y:  1.0, z: 0.0 };
+
+        let uv0 = Vec2 { x: 1.0, y: 1.0 };
+        let uv1 = Vec2 { x: 0.0, y: 1.0 };
+        let uv2 = Vec2 { x: 0.0, y: 0.0 };
+        let uv3 = Vec2 { x: 1.0, y: 0.0 };
+
+        let normal = Vec3 { x: 0.0, y: 0.0, z: 1.0 };
+        let tangent = Vec4 { x: 1.0, y: 0.0, z: 0.0, w: 1.0 };
+        let zero_tangent = [tangent, tangent, tangent];
+
+        let triangles = [
+            Triangle {
+                positions: [v0, v1, v2],
+                normals: [normal, normal, normal],
+                tangents: zero_tangent,
+                uvs: [uv0, uv1, uv2],
+                color: 0xFFFFFFFF,
+                material_edge_index: 0xFFFF, // RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE
+            },
+            Triangle {
+                positions: [v0, v2, v3],
+                normals: [normal, normal, normal],
+                tangents: zero_tangent,
+                uvs: [uv0, uv2, uv3],
+                color: 0xFFFFFFFF,
+                material_edge_index: 0xFFFF, // RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE
+            },
+        ];
+
+        let raw_handle = mesh::upload_mesh(
+            &s.device,
+            &s.command_queue,
+            &mut s.mesh_slotmap,
+            &triangles,
+        );
+        s.billboard_mesh = MeshHandle::try_new(raw_handle);
+        match s.billboard_mesh {
+            Some(_) => eprintln!("[Rust Metal] Billboard mesh created"),
+            None => eprintln!("[Rust Metal] WARNING: Billboard mesh creation failed"),
+        }
+    }
+
     eprintln!("[Rust Metal] Initialization complete");
 }
 
@@ -157,35 +208,40 @@ pub extern "C" fn RT_BeginScene(settings: *const SceneSettings) {
     let settings = unsafe { &*settings };
     let s = state::get();
 
-    // Read camera from settings
-    if !settings.camera.is_null() {
-        s.camera = unsafe { *settings.camera };
-    }
+    // Parse camera from settings
+    let camera = if !settings.camera.is_null() {
+        unsafe { *settings.camera }
+    } else {
+        s.camera
+    };
 
-    // If vfov is 0 or tiny (config not loaded), use a sensible default
-    if s.camera.vfov < 1.0 {
-        s.camera.vfov = 72.0;
-    }
+    // Parse scene config with validated defaults
+    let config = SceneConfig::new(
+        camera,
+        settings.render_width_override,
+        settings.render_height_override,
+        settings.render_blit,
+        s.render_width,
+        s.render_height,
+    );
 
-    // Read render size
-    if settings.render_width_override > 0 && settings.render_height_override > 0 {
-        s.render_width = settings.render_width_override;
-        s.render_height = settings.render_height_override;
-    }
-
-    s.render_blit = settings.render_blit;
+    // Apply parsed config to state
+    s.camera = config.camera;
+    s.render_width = config.render_width;
+    s.render_height = config.render_height;
+    s.render_blit = config.render_blit;
 
     if s.frame_index % 60 == 0 {
         eprintln!(
             "[Rust Metal] BeginScene: camera=({:.1},{:.1},{:.1}) vfov={:.1} render={}x{} blit={}",
             s.camera.position.x, s.camera.position.y, s.camera.position.z,
             s.camera.vfov,
-            s.render_width, s.render_height, settings.render_blit
+            s.render_width, s.render_height, s.render_blit
         );
     }
 
     // Clear instance list and lights for new frame
-    raytrace::begin_scene(&mut s.raytrace_instances);
+    s.raytrace_instances.clear();
     s.lights.clear();
 }
 
@@ -313,7 +369,7 @@ fn present_frame() {
             s.raster_sampler.as_ref(),
             s.white_texture.as_ref(),
         ) {
-            raster::encode_batches(
+            renderer::raster::encode_batches(
                 &encoder,
                 &s.device,
                 target_w,
@@ -395,13 +451,14 @@ pub extern "C" fn RT_UploadTexture(params: *const UploadTextureParams) -> Resour
 
 #[no_mangle]
 pub extern "C" fn RT_UpdateMaterial(material_index: u16, material: *const Material) -> u16 {
-    if material_index as usize >= RT_MAX_MATERIALS {
-        return u16::MAX;
-    }
+    let idx = match BitmapIndex::new(material_index) {
+        Some(idx) => idx,
+        None => return u16::MAX,
+    };
     if !material.is_null() {
         let mat = unsafe { &*material };
         let s = state::get();
-        let gpu_mat = &mut s.gpu_materials[material_index as usize];
+        let gpu_mat = &mut s.gpu_materials[idx.as_usize()];
         gpu_mat.albedo_index = mat.textures[0].index; // slot 0 = albedo
         gpu_mat.flags = mat.flags;
     }
@@ -464,8 +521,9 @@ pub extern "C" fn RT_GetDefaultBlackTexture() -> ResourceHandle {
 
 #[no_mangle]
 pub extern "C" fn RT_GetBillboardMesh() -> ResourceHandle {
-    // TODO: Return handle to billboard quad mesh
-    ResourceHandle::NULL
+    state::get().billboard_mesh
+        .map(|m| m.raw())
+        .unwrap_or(ResourceHandle::NULL)
 }
 
 #[no_mangle]
@@ -503,17 +561,22 @@ pub extern "C" fn RT_RaytraceMeshEx(params: *mut RenderMeshParams) {
         return;
     }
 
-    let transform = unsafe { &*params.transform };
-    let s = state::get();
+    let transform = unsafe { *params.transform };
+    let color = RGBA8(params.color);
+    let material_override = BitmapIndex::new(params.material_override);
 
-    raytrace::queue_mesh_instance(
-        &mut s.raytrace_instances,
-        &s.mesh_slotmap,
-        params.mesh_handle,
+    let s = state::get();
+    if s.mesh_slotmap.find(params.mesh_handle).is_none() {
+        return;
+    }
+    let mesh = MeshHandle::from_validated(params.mesh_handle);
+
+    s.raytrace_instances.push(SceneInstance::LevelMesh {
+        mesh,
         transform,
-        params.color,
-        params.material_override,
-    );
+        color,
+        material_override,
+    });
 }
 
 #[no_mangle]
@@ -521,44 +584,51 @@ pub extern "C" fn RT_RaytraceMeshColor(
     mesh: ResourceHandle,
     color: Vec4,
     transform: *const Mat4,
-    prev_transform: *const Mat4,
+    _prev_transform: *const Mat4,
 ) {
-    let r = ((color.x * 255.0).clamp(0.0, 255.0)) as u32;
-    let g = ((color.y * 255.0).clamp(0.0, 255.0)) as u32;
-    let b = ((color.z * 255.0).clamp(0.0, 255.0)) as u32;
-    let a = ((color.w * 255.0).clamp(0.0, 255.0)) as u32;
-    let packed = r | (g << 8) | (b << 16) | (a << 24);
+    if transform.is_null() {
+        return;
+    }
+    let transform = unsafe { *transform };
+    let color = RGBA8::from_rgba_f32(color.x, color.y, color.z, color.w);
 
-    let mut params = RenderMeshParams {
-        key_signature: 0,
-        key_submodel_index: 0,
-        flags: 0,
-        mesh_handle: mesh,
+    let s = state::get();
+    if s.mesh_slotmap.find(mesh).is_none() {
+        return;
+    }
+    let mesh = MeshHandle::from_validated(mesh);
+
+    s.raytrace_instances.push(SceneInstance::LevelMesh {
+        mesh,
         transform,
-        prev_transform,
-        color: packed,
-        material_override: 0,
-    };
-    RT_RaytraceMeshEx(&mut params);
+        color,
+        material_override: None,
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn RT_RaytraceMesh(
     mesh: ResourceHandle,
     transform: *const Mat4,
-    prev_transform: *const Mat4,
+    _prev_transform: *const Mat4,
 ) {
-    let mut params = RenderMeshParams {
-        key_signature: 0,
-        key_submodel_index: 0,
-        flags: 0,
-        mesh_handle: mesh,
+    if transform.is_null() {
+        return;
+    }
+    let transform = unsafe { *transform };
+
+    let s = state::get();
+    if s.mesh_slotmap.find(mesh).is_none() {
+        return;
+    }
+    let mesh = MeshHandle::from_validated(mesh);
+
+    s.raytrace_instances.push(SceneInstance::LevelMesh {
+        mesh,
         transform,
-        prev_transform,
-        color: 0xFFFFFFFF,
-        material_override: 0,
-    };
-    RT_RaytraceMeshEx(&mut params);
+        color: RGBA8::WHITE,
+        material_override: None,
+    });
 }
 
 #[no_mangle]
@@ -566,50 +636,93 @@ pub extern "C" fn RT_RaytraceMeshOverrideMaterial(
     mesh: ResourceHandle,
     material_override: u16,
     transform: *const Mat4,
-    prev_transform: *const Mat4,
+    _prev_transform: *const Mat4,
 ) {
-    let mut params = RenderMeshParams {
-        key_signature: 0,
-        key_submodel_index: 0,
-        flags: 0,
-        mesh_handle: mesh,
+    if transform.is_null() {
+        return;
+    }
+    let transform = unsafe { *transform };
+
+    let s = state::get();
+    if s.mesh_slotmap.find(mesh).is_none() {
+        return;
+    }
+    let mesh = MeshHandle::from_validated(mesh);
+
+    s.raytrace_instances.push(SceneInstance::LevelMesh {
+        mesh,
         transform,
-        prev_transform,
-        color: 0xFFFFFFFF,
-        material_override,
-    };
-    RT_RaytraceMeshEx(&mut params);
+        color: RGBA8::WHITE,
+        material_override: BitmapIndex::new(material_override),
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn RT_RaytraceBillboard(
-    _material_index: u16,
-    _dim: Vec2,
-    _pos: Vec3,
-    _prev_pos: Vec3,
+    material_index: u16,
+    dim: Vec2,
+    pos: Vec3,
+    prev_pos: Vec3,
 ) {
-    // TODO: Billboard rendering
+    let material = match BitmapIndex::new(material_index) {
+        Some(m) => m,
+        None => return,
+    };
+    let s = state::get();
+    let mesh = match s.billboard_mesh {
+        Some(m) => m,
+        None => return,
+    };
+    let instance = SceneInstance::billboard(
+        &s.camera, mesh, material, RGBA8::WHITE, dim, pos, prev_pos,
+    );
+    s.raytrace_instances.push(instance);
 }
 
 #[no_mangle]
 pub extern "C" fn RT_RaytraceBillboardColored(
-    _material_index: u16,
-    _color: Vec3,
-    _dim: Vec2,
-    _pos: Vec3,
-    _prev_pos: Vec3,
+    material_index: u16,
+    color: Vec3,
+    dim: Vec2,
+    pos: Vec3,
+    prev_pos: Vec3,
 ) {
-    // TODO: Billboard rendering with color
+    let material = match BitmapIndex::new(material_index) {
+        Some(m) => m,
+        None => return,
+    };
+    let color = RGBA8::from_rgba_f32(color.x, color.y, color.z, 1.0);
+    let s = state::get();
+    let mesh = match s.billboard_mesh {
+        Some(m) => m,
+        None => return,
+    };
+    let instance = SceneInstance::billboard(
+        &s.camera, mesh, material, color, dim, pos, prev_pos,
+    );
+    s.raytrace_instances.push(instance);
 }
 
 #[no_mangle]
 pub extern "C" fn RT_RaytraceRod(
-    _material_index: u16,
-    _bot_p: Vec3,
-    _top_p: Vec3,
-    _width: f32,
+    material_index: u16,
+    bot_p: Vec3,
+    top_p: Vec3,
+    width: f32,
 ) {
-    // TODO: Rod rendering
+    let material = match BitmapIndex::new(material_index) {
+        Some(m) => m,
+        None => return,
+    };
+    let s = state::get();
+    let mesh = match s.billboard_mesh {
+        Some(m) => m,
+        None => return,
+    };
+    let instance = SceneInstance::rod(
+        &s.camera, mesh, material, bot_p, top_p, width,
+    );
+    s.raytrace_instances.push(instance);
 }
 
 #[no_mangle]
@@ -629,7 +742,7 @@ pub extern "C" fn RT_RaytraceRender() {
     let render_h = s.render_height;
 
     // Ensure output texture exists and matches render size
-    raytrace::ensure_output_texture(
+    renderer::raytrace::ensure_output_texture(
         &s.device,
         &mut s.raytrace_output_texture,
         &mut s.raytrace_output_w,
@@ -647,20 +760,17 @@ pub extern "C" fn RT_RaytraceRender() {
     let camera = s.camera;
     let lights: Vec<Light> = s.lights.clone();
 
-    raytrace::dispatch_rays(
+    renderer::raytrace::dispatch(
         &s.device,
         &s.command_queue,
         &s.mesh_slotmap,
-        &mut s.raytrace_instances,
+        &s.raytrace_instances,
         &camera,
         render_w,
         render_h,
         &pipeline,
         &output_tex,
-        &mut s.tlas,
-        &mut s.tlas_scratch,
-        &mut s.tlas_buffer_index,
-        &mut s.prev_instance_keys,
+        &mut s.tlas_state,
         &lights,
         &s.material_edges,
         &s.material_indices,
@@ -742,7 +852,7 @@ pub extern "C" fn RT_RasterTriangles(params: *mut RasterTrianglesParams, num_par
         }
         let vertices =
             unsafe { std::slice::from_raw_parts(p.vertices, p.num_vertices as usize) };
-        raster::push_tri_batch(&mut s.raster_batches, p.texture_handle, vertices);
+        renderer::raster::push_tri_batch(&mut s.raster_batches, p.texture_handle, vertices);
     }
 }
 
@@ -753,7 +863,7 @@ pub extern "C" fn RT_RasterLines(vertices: *mut RasterLineVertex, num_vertices: 
     }
     let verts = unsafe { std::slice::from_raw_parts(vertices, num_vertices as usize) };
     let s = state::get();
-    raster::push_lines(&mut s.raster_lines, verts);
+    renderer::raster::push_lines(&mut s.raster_lines, verts);
 }
 
 #[no_mangle]
@@ -824,7 +934,7 @@ pub extern "C" fn RT_RasterBlitScene(
     ];
 
     let handle = s.raytrace_output_handle;
-    raster::push_tri_batch(&mut s.raster_batches, handle, &vertices);
+    renderer::raster::push_tri_batch(&mut s.raster_batches, handle, &vertices);
 }
 
 #[no_mangle]
@@ -862,7 +972,7 @@ pub extern "C" fn RT_RasterBlit(
         RasterTriVertex { pos: Vec3 { x: x0, y: y0, z: 0.0 }, uv: Vec2 { x: 0.0, y: 0.0 }, color: white, texture_index: 0 },
     ];
 
-    raster::push_tri_batch(&mut s.raster_batches, src, &vertices);
+    renderer::raster::push_tri_batch(&mut s.raster_batches, src, &vertices);
 }
 
 #[no_mangle]
