@@ -81,7 +81,7 @@
     },
     {
       "name": "metal-mac-debug",
-      "description": "Metal debug build for macOS",
+      "description": "Metal (ObjC) debug build for macOS",
       "inherits": "default",
       "condition": {
         "type": "equals",
@@ -95,7 +95,7 @@
     },
     {
       "name": "metal-mac-release",
-      "description": "Metal release build for macOS",
+      "description": "Metal (ObjC) release build for macOS",
       "inherits": "default",
       "condition": {
         "type": "equals",
@@ -105,6 +105,34 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "GRAPHICS_API": "Metal"
+      }
+    },
+    {
+      "name": "rust-mac-debug",
+      "description": "Rust Metal debug build for macOS (default)",
+      "inherits": "default",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "GRAPHICS_API": "Rust"
+      }
+    },
+    {
+      "name": "rust-mac-release",
+      "description": "Rust Metal release build for macOS",
+      "inherits": "default",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "GRAPHICS_API": "Rust"
       }
     }
   ]
