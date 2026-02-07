@@ -444,7 +444,8 @@ impl Default for RendererIO {
 pub struct GPUMaterial {
     pub albedo_index: u32,
     pub flags: u32,
-    pub _pad: [u32; 2],
+    pub emissive_factor: u32,
+    pub _pad: u32,
 }
 
 // ============================================================================

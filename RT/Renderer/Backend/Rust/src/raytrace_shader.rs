@@ -91,7 +91,8 @@ constant uint RT_MAT2_ORIENT_MASK      = 0xC000u;  // bits 14-15
 struct GPUMaterial {
     uint albedo_index;
     uint flags;
-    uint _pad[2];
+    uint emissive_factor;
+    uint _pad;
 };
 
 // Look up a u16 material index from the packed u16 array
@@ -515,6 +516,23 @@ kernel void raytrace_main(
 
             // Lambertian BRDF + tone mapping
             float3 hdr = (albedo / 3.14159265) * total_light;
+
+            // Emissive contribution (self-illuminating surfaces glow regardless of lighting)
+            {
+                uint mei_raw = tri.material_edge_index;
+                uint mei = mei_raw & RT_TRIANGLE_MEI_MASK;
+                uint edge = material_edges[mei];
+                uint mat1_tex = edge & 0xFFFFu;
+                if (mat1_tex > 0u) {
+                    uint mat_slot = get_material_index(mat1_tex, material_indices);
+                    uint ef = gpu_materials[mat_slot].emissive_factor;
+                    if (ef > 0u) {
+                        float strength = float(ef) / 255.0;
+                        hdr += albedo * strength;
+                    }
+                }
+            }
+
             hdr *= exp2(0.1); // exposure
             float3 shaded = ApplyTonemappingCurve(hdr);
 

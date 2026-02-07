@@ -213,7 +213,8 @@ mod tests {
             gpu_mats.push(GPUMaterial {
                 albedo_index: i + 1, // nonzero
                 flags: 0,
-                _pad: [0; 2],
+                emissive_factor: 0,
+                _pad: 0,
             });
         }
 

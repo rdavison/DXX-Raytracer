@@ -461,6 +461,11 @@ pub extern "C" fn RT_UpdateMaterial(material_index: u16, material: *const Materi
         let gpu_mat = &mut s.gpu_materials[idx.as_usize()];
         gpu_mat.albedo_index = mat.textures[0].index; // slot 0 = albedo
         gpu_mat.flags = mat.flags;
+        gpu_mat.emissive_factor = if (mat.flags & 0x1) != 0 {
+            (mat.emissive_strength * 255.0) as u32
+        } else {
+            0
+        };
     }
     material_index
 }
