@@ -774,9 +774,15 @@ kernel void raytrace_main(
 
             // Hemisphere ambient: cool blue from above, warm brown from below
             float hemisphere_blend = normal_world.y * 0.5 + 0.5; // 0=down, 1=up
-            float3 sky_color   = float3(0.06, 0.08, 0.12); // cool blue
-            float3 ground_color = float3(0.05, 0.04, 0.03); // warm brown
+            float3 sky_color   = float3(0.12, 0.14, 0.20); // cool blue
+            float3 ground_color = float3(0.10, 0.08, 0.06); // warm brown
             float3 total_light = mix(ground_color, sky_color, hemisphere_blend);
+
+            // Camera fill: prevents surfaces near the player from going black
+            // when headlights drop below floors at low flight altitudes
+            float view_fill = max(dot(normal_world, -dir), 0.0) * 0.12;
+            total_light += float3(view_fill);
+
             float3 total_specular = float3(0.0);
             float3 V = -dir; // view direction (toward camera)
 
@@ -818,7 +824,7 @@ kernel void raytrace_main(
                     float attenuation = 1.0 / max(dist_sq, min_radius * min_radius);
 
                     // Shadow visibility — branched on shadow_mode
-                    float3 shadow_origin = hit_pos + normal_world * 0.002;
+                    float3 shadow_origin = hit_pos + normal_world * 0.005;
                     float visibility = 1.0;
 
                     if (scene.shadow_mode == 1) {
