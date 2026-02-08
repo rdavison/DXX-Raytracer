@@ -257,8 +257,8 @@ RT_LightDefinition g_light_definitions[] =
 static RT_LightDefinition g_default_light_definitions[RT_ARRAY_COUNT(g_light_definitions)];
 
 static RT_HeadlightSettings g_default_headlights = {
-	.pos_offset_horz = 3.0f,
-	.pos_offset_vert = -2.0f,
+	.pos_offset_horz = 1.5f,
+	.pos_offset_vert = -0.5f,
 	.skew_horz       = 0.1f,
 	.skew_vert       = 0.06f,
 	.radius          = 0.05f,

@@ -636,6 +636,22 @@ void RT_FindAndSubmitNearbyLights(RT_Vec3 player_pos)
 		for (int i = 0; i < m_lights_found; ++i) {
 			RT_RaytraceSubmitLight(m_lights[m_lights_to_sort[i]]);
 		}
+
+		// Safety net: include any light within a close radius that the segment
+		// traversal missed (handles segment-edge boundary cases where Viewer->segnum
+		// may point to the wrong segment for a frame or two).
+		{
+			const float nearby_radius = 150.0f;
+			for (int i = 0; i < m_light_count; i++) {
+				if (lights_added[i]) continue;
+				const float dist = RT_Vec3Length(RT_Vec3Sub(player_pos, RT_TranslationFromMat34(m_lights[i].transform)));
+				if (dist < nearby_radius) {
+					RT_RaytraceSubmitLight(m_lights[i]);
+					lights_added[i] = 1;
+					total++;
+				}
+			}
+		}
 	}
 
 	g_pending_light_update = false;

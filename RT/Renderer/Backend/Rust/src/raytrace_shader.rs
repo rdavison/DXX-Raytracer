@@ -573,7 +573,9 @@ kernel void raytrace_main(
     float3 origin = float3(scene.camera_position);
 
     // --- Intersection ---
-    float4 final_color = float4(0.0, 0.0, 0.0, 1.0);
+    // Very dark blue background for ray misses — distinguishes "no geometry hit"
+    // from "hit but unlit" when diagnosing scene-going-dark bugs.
+    float4 final_color = float4(0.005, 0.005, 0.015, 1.0);
 
     if (scene.use_accel != 0) {
         // Hardware-accelerated intersection via TLAS with door transparency bounce loop
