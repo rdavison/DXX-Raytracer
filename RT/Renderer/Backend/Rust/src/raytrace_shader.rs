@@ -872,6 +872,7 @@ kernel void raytrace_main(
             }
 
             // Single-bounce specular reflection (nearby geometry bleeds into surfaces)
+            // Reflection ray skips billboards and alpha cutouts (bounce loop)
             if (scene.use_accel != 0) {
                 float3 refl_dir = reflect(dir, normal_world);
                 ray refl_ray;
@@ -880,20 +881,60 @@ kernel void raytrace_main(
                 refl_ray.min_distance = 0.001;
                 refl_ray.max_distance = 200.0;
 
-                intersector<triangle_data, instancing> refl_i;
-                refl_i.assume_geometry_type(geometry_type::triangle);
-                refl_i.force_opacity(forced_opacity::opaque);
-                auto refl_hit = refl_i.intersect(refl_ray, accel_struct, 0xFF);
+                bool refl_found = false;
+                uint r_inst_id = 0;
+                uint r_prim_id = 0;
+                float2 r_bary;
+                float r_total_dist = 0.0;
 
-                if (refl_hit.type != intersection_type::none) {
-                    uint r_inst_id = refl_hit.instance_id;
-                    uint r_prim_id = refl_hit.primitive_id;
+                // Bounce loop: skip billboards and alpha cutouts
+                for (int rb = 0; rb < 4; rb++) {
+                    intersector<triangle_data, instancing> refl_i;
+                    refl_i.assume_geometry_type(geometry_type::triangle);
+                    refl_i.force_opacity(forced_opacity::opaque);
+                    auto refl_hit = refl_i.intersect(refl_ray, accel_struct, 0xFF);
+
+                    if (refl_hit.type == intersection_type::none) break;
+
+                    uint ri = refl_hit.instance_id;
+                    uint rp = refl_hit.primitive_id;
+                    constant Instance& ri_inst = instances[ri];
+                    uint ri_tri_idx = ri_inst.triangle_offset + rp;
+                    constant Triangle& ri_tri = triangles[ri_tri_idx];
+
+                    // Skip billboards/rods (gas/plasma doesn't reflect)
+                    if (ri_tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
+                        refl_ray.origin = refl_ray.origin + refl_ray.direction * (refl_hit.distance + 0.002);
+                        r_total_dist += refl_hit.distance + 0.002;
+                        continue;
+                    }
+
+                    // Skip alpha cutouts
+                    float2 rb_bary = refl_hit.triangle_barycentric_coord;
+                    float rb_w0 = 1.0 - rb_bary.x - rb_bary.y;
+                    float2 rb_uv = float2(ri_tri.uv0) * rb_w0 + float2(ri_tri.uv1) * rb_bary.x + float2(ri_tri.uv2) * rb_bary.y;
+                    if (should_skip_cutout(ri_tri.material_edge_index, rb_uv,
+                            material_edges, material_indices, gpu_materials,
+                            texture_remap, remap_table_size, alpha_textures, tex_sampler)) {
+                        refl_ray.origin = refl_ray.origin + refl_ray.direction * (refl_hit.distance + 0.002);
+                        r_total_dist += refl_hit.distance + 0.002;
+                        continue;
+                    }
+
+                    // Solid geometry hit
+                    refl_found = true;
+                    r_inst_id = ri;
+                    r_prim_id = rp;
+                    r_bary = rb_bary;
+                    r_total_dist += refl_hit.distance;
+                    break;
+                }
+
+                if (refl_found) {
                     constant Instance& r_inst = instances[r_inst_id];
                     uint r_tri_idx = r_inst.triangle_offset + r_prim_id;
                     constant Triangle& r_tri = triangles[r_tri_idx];
 
-                    // Interpolate reflection hit normal + UV
-                    float2 r_bary = refl_hit.triangle_barycentric_coord;
                     float r_w0 = 1.0 - r_bary.x - r_bary.y;
                     float3 r_normal_local = normalize(r_tri.norm0 * r_w0 + r_tri.norm1 * r_bary.x + r_tri.norm2 * r_bary.y);
                     float3x3 r_nmat = float3x3(r_inst.world_to_object[0].xyz, r_inst.world_to_object[1].xyz, r_inst.world_to_object[2].xyz);
@@ -901,17 +942,15 @@ kernel void raytrace_main(
                     if (dot(r_normal, refl_dir) > 0.0) r_normal = -r_normal;
 
                     float2 r_uv = float2(r_tri.uv0) * r_w0 + float2(r_tri.uv1) * r_bary.x + float2(r_tri.uv2) * r_bary.y;
-                    float3 r_hit_pos = refl_ray.origin + refl_dir * refl_hit.distance;
+                    float3 r_hit_pos = refl_ray.origin + refl_dir * r_total_dist;
 
                     // Reflection albedo from texture
                     float4 r_inst_color = decode_color(r_inst.color);
                     float3 r_albedo = (decode_color(r_tri.color) * r_inst_color).rgb;
-                    if (r_tri.material_edge_index != RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
-                        uint r_mat = resolve_material_index(r_tri.material_edge_index, material_edges, material_indices);
-                        uint r_tex = gpu_materials[r_mat].albedo_index;
-                        float4 r_samp = sample_bindless(r_tex, r_uv, tex_array, tex_sampler);
-                        if (r_samp.a > 0.0) r_albedo = r_samp.rgb * r_inst_color.rgb;
-                    }
+                    uint r_mat = resolve_material_index(r_tri.material_edge_index, material_edges, material_indices);
+                    uint r_tex = gpu_materials[r_mat].albedo_index;
+                    float4 r_samp = sample_bindless(r_tex, r_uv, tex_array, tex_sampler);
+                    if (r_samp.a > 0.0) r_albedo = r_samp.rgb * r_inst_color.rgb;
 
                     // Basic diffuse shading at reflection hit (no shadows for perf)
                     float3 r_light = float3(0.05);
