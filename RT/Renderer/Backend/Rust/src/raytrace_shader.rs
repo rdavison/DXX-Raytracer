@@ -116,18 +116,17 @@ inline float2 decode_surface(uint surface_type) {
     }
 }
 
-// Per-surface wavelength filter: tints reflected light.
-// Rock absorbs blue, passing warm tones. Steel is cool-shifted. etc.
-inline float3 surface_reflection_tint(uint surface_type) {
-    switch (surface_type) {
-        case 0: return float3(1.15, 0.95, 0.70); // Rock: warm filter, absorbs blue
-        case 1: return float3(1.0, 1.0, 1.0);    // Metal: neutral (albedo already tints)
-        case 2: return float3(0.90, 0.95, 1.05);  // Steel: slight cool shift
-        case 3: return float3(1.0, 1.0, 0.95);   // Plastic: very slight warm
-        case 4: return float3(1.0, 0.95, 0.90);  // Rubber: slightly warm
-        case 5: return float3(1.0, 1.0, 1.0);    // Emissive: neutral
-        default: return float3(1.15, 0.95, 0.70); // fallback = Rock
-    }
+// Derive a wavelength absorption filter from the surface's own albedo color.
+// Boosts the albedo's saturation so colored surfaces more strongly filter
+// reflected light — a red wall absorbs more blue/green, etc.
+// sat_boost controls strength: 0 = no extra filtering, 1 = heavily saturated.
+inline float3 albedo_wavelength_filter(float3 albedo, float sat_boost) {
+    float lum = dot(albedo, float3(0.299, 0.587, 0.114));
+    if (lum < 0.01) return float3(1.0); // near-black: no meaningful color to filter
+    // Normalize albedo to get the hue direction, then boost saturation
+    float3 hue_dir = albedo / lum;  // >1 for dominant channel, <1 for absorbed
+    // Lerp between neutral (1,1,1) and the hue direction
+    return mix(float3(1.0), hue_dir, sat_boost);
 }
 
 // Bindless texture array via Metal Argument Buffer (Tier 2)
@@ -758,7 +757,6 @@ kernel void raytrace_main(
             // Extract roughness/metalness/reflection tint from material
             float roughness = 0.8;
             float metalness = 0.0;
-            float3 refl_tint = float3(1.15, 0.95, 0.70); // default = Rock
             uint surface_type_id = 0; // 0 = Rock
             if (tri.material_edge_index != RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
                 uint surf_slot = resolve_material_index(tri.material_edge_index, material_edges, material_indices);
@@ -766,8 +764,12 @@ kernel void raytrace_main(
                 float2 rm = decode_surface(surface_type_id);
                 roughness = rm.x;
                 metalness = rm.y;
-                refl_tint = surface_reflection_tint(surface_type_id);
             }
+            // Derive wavelength filter from the actual texture color.
+            // Dielectrics (rock, plastic, rubber) get stronger filtering;
+            // metals use albedo directly via spec_color so need less boost.
+            float sat_boost = (metalness > 0.5) ? 0.15 : 0.4;
+            float3 refl_tint = albedo_wavelength_filter(albedo, sat_boost);
             roughness = clamp(roughness, 0.05, 1.0);
 
             // Hemisphere ambient: cool blue from above, warm brown from below
@@ -917,11 +919,10 @@ kernel void raytrace_main(
             }
 
             // PBR-lite BRDF: metalness controls diffuse/specular balance
-            // Metals: no diffuse, specular tinted by albedo
-            // Dielectrics: full diffuse, white specular (0.04 base reflectivity)
-            // refl_tint filters reflected wavelengths per surface type (e.g. rock absorbs blue)
+            // Both diffuse and specular are filtered by the material's color —
+            // a red wall absorbs blue/green from all reflected light, including highlights.
             float3 diffuse = albedo * refl_tint * (1.0 - metalness) * total_light / 3.14159;
-            float3 spec_color = mix(float3(0.04), albedo, metalness);
+            float3 spec_color = mix(refl_tint * 0.06, albedo, metalness);
             float3 specular = spec_color * total_specular;
             float3 hdr = diffuse + specular;
             float emissive_blend = 0.0; // 0 = normal tonemapping, 1 = bypass for full-bright emissive
@@ -1122,7 +1123,11 @@ kernel void raytrace_main(
                     float fresnel = f0_base + (1.0 - f0_base) * pow(1.0 - cos_theta, 5.0);
                     fresnel *= (1.0 - roughness * 0.5);
 
-                    hdr = mix(hdr, r_color_avg, fresnel);
+                    // Metals tint reflections by their surface color (e.g. copper → orange).
+                    // Dielectrics have colorless specular reflections — the reflected
+                    // scene keeps its true colors. The wall's color only affects diffuse.
+                    float3 refl_final = mix(r_color_avg, r_color_avg * refl_tint, metalness);
+                    hdr = mix(hdr, refl_final, fresnel);
                 }
             }
 
