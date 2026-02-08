@@ -405,39 +405,41 @@ fn present_frame() {
             s.tri_pipeline.as_ref(),
             s.raster_sampler.as_ref(),
         ) {
-            let white = Vec4 { x: 1.0, y: 1.0, z: 1.0, w: 1.0 };
-            let fullscreen_verts = [
-                RasterTriVertex { pos: Vec3 { x: -1.0, y: -1.0, z: 0.0 }, uv: Vec2 { x: 0.0, y: 1.0 }, color: white, texture_index: 0 },
-                RasterTriVertex { pos: Vec3 { x:  1.0, y: -1.0, z: 0.0 }, uv: Vec2 { x: 1.0, y: 1.0 }, color: white, texture_index: 0 },
-                RasterTriVertex { pos: Vec3 { x: -1.0, y:  1.0, z: 0.0 }, uv: Vec2 { x: 0.0, y: 0.0 }, color: white, texture_index: 0 },
-                RasterTriVertex { pos: Vec3 { x:  1.0, y: -1.0, z: 0.0 }, uv: Vec2 { x: 1.0, y: 1.0 }, color: white, texture_index: 0 },
-                RasterTriVertex { pos: Vec3 { x:  1.0, y:  1.0, z: 0.0 }, uv: Vec2 { x: 1.0, y: 0.0 }, color: white, texture_index: 0 },
-                RasterTriVertex { pos: Vec3 { x: -1.0, y:  1.0, z: 0.0 }, uv: Vec2 { x: 0.0, y: 0.0 }, color: white, texture_index: 0 },
-            ];
-
-            encoder.setViewport(MTLViewport {
-                originX: 0.0, originY: 0.0,
-                width: target_w, height: target_h,
-                znear: 0.0, zfar: 1.0,
-            });
-            encoder.setRenderPipelineState(tri_pipe);
-            unsafe { encoder.setFragmentSamplerState_atIndex(Some(samp), 0); }
-            unsafe { encoder.setFragmentTexture_atIndex(Some(rt_tex), 0); }
-            if let Some(bloom_tex) = s.bloom_texture_a.as_ref() {
-                unsafe { encoder.setFragmentTexture_atIndex(Some(bloom_tex), 1); }
+            // Lazily create the fullscreen blit VB once (never changes)
+            if s.fullscreen_vb.is_none() {
+                let white = Vec4 { x: 1.0, y: 1.0, z: 1.0, w: 1.0 };
+                let fullscreen_verts = [
+                    RasterTriVertex { pos: Vec3 { x: -1.0, y: -1.0, z: 0.0 }, uv: Vec2 { x: 0.0, y: 1.0 }, color: white, texture_index: 0 },
+                    RasterTriVertex { pos: Vec3 { x:  1.0, y: -1.0, z: 0.0 }, uv: Vec2 { x: 1.0, y: 1.0 }, color: white, texture_index: 0 },
+                    RasterTriVertex { pos: Vec3 { x: -1.0, y:  1.0, z: 0.0 }, uv: Vec2 { x: 0.0, y: 0.0 }, color: white, texture_index: 0 },
+                    RasterTriVertex { pos: Vec3 { x:  1.0, y: -1.0, z: 0.0 }, uv: Vec2 { x: 1.0, y: 1.0 }, color: white, texture_index: 0 },
+                    RasterTriVertex { pos: Vec3 { x:  1.0, y:  1.0, z: 0.0 }, uv: Vec2 { x: 1.0, y: 0.0 }, color: white, texture_index: 0 },
+                    RasterTriVertex { pos: Vec3 { x: -1.0, y:  1.0, z: 0.0 }, uv: Vec2 { x: 0.0, y: 0.0 }, color: white, texture_index: 0 },
+                ];
+                let byte_len = fullscreen_verts.len() * std::mem::size_of::<RasterTriVertex>();
+                s.fullscreen_vb = unsafe {
+                    s.device.newBufferWithBytes_length_options(
+                        NonNull::new_unchecked(fullscreen_verts.as_ptr() as *mut std::ffi::c_void),
+                        byte_len,
+                        MTLResourceOptions::StorageModeShared,
+                    )
+                };
             }
 
-            let byte_len = fullscreen_verts.len() * std::mem::size_of::<RasterTriVertex>();
-            let vb = unsafe {
-                s.device.newBufferWithBytes_length_options(
-                    NonNull::new_unchecked(fullscreen_verts.as_ptr() as *mut std::ffi::c_void),
-                    byte_len,
-                    MTLResourceOptions::StorageModeShared,
-                )
-            };
-            if let Some(ref buf) = vb {
+            if let Some(ref vb) = s.fullscreen_vb {
+                encoder.setViewport(MTLViewport {
+                    originX: 0.0, originY: 0.0,
+                    width: target_w, height: target_h,
+                    znear: 0.0, zfar: 1.0,
+                });
+                encoder.setRenderPipelineState(tri_pipe);
+                unsafe { encoder.setFragmentSamplerState_atIndex(Some(samp), 0); }
+                unsafe { encoder.setFragmentTexture_atIndex(Some(rt_tex), 0); }
+                if let Some(bloom_tex) = s.bloom_texture_a.as_ref() {
+                    unsafe { encoder.setFragmentTexture_atIndex(Some(bloom_tex), 1); }
+                }
                 unsafe {
-                    encoder.setVertexBuffer_offset_atIndex(Some(buf), 0, 0);
+                    encoder.setVertexBuffer_offset_atIndex(Some(vb), 0, 0);
                     encoder.drawPrimitives_vertexStart_vertexCount(
                         MTLPrimitiveType::Triangle,
                         0,

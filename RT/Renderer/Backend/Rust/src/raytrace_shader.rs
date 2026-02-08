@@ -969,6 +969,15 @@ kernel void raytrace_main(
                 hdr = albedo * scene.billboard_emissive_boost;
             }
 
+            // Robots glow with self-illumination (OBJ_ROBOT == 2)
+            // Luminance-weighted: bright/saturated parts (eyes, energy cores) glow
+            // strongly while the dark body stays subdued, preserving contrast.
+            if (inst.object_type == 2u) {
+                float robot_lum = dot(albedo, float3(0.299, 0.587, 0.114));
+                float eye_glow = smoothstep(0.15, 0.5, robot_lum) * 2.5;
+                hdr += albedo * eye_glow;
+            }
+
             // Multi-sample specular reflection with roughness-based diffusion.
             // Smooth surfaces: 1 ray (mirror). Rough surfaces: stratified jittered rays
             // in tangent space for even coverage of the blur cone. Skip emissive.
@@ -1126,11 +1135,12 @@ kernel void raytrace_main(
                 if (refl_hits > 0) {
                     float3 r_color_avg = refl_accum / float(refl_hits);
 
-                    // Schlick Fresnel: metals reflect more, dielectrics reflect at grazing angles
+                    // Schlick Fresnel: metals reflect more, dielectrics reflect at grazing angles.
+                    // Roughness dampens reflections so rough surfaces show more underlying texture.
                     float cos_theta = max(dot(-dir, normal_world), 0.0);
                     float f0_base = mix(0.04, 1.0, metalness);
                     float fresnel = f0_base + (1.0 - f0_base) * pow(1.0 - cos_theta, 5.0);
-                    fresnel *= (1.0 - roughness * 0.5);
+                    fresnel *= (1.0 - roughness * 0.7);
 
                     // Metals tint reflections by their surface color (e.g. copper → orange).
                     // Dielectrics have colorless specular reflections — the reflected

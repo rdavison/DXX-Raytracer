@@ -219,12 +219,16 @@ fn build_tlas(
         return None;
     }
 
-    // Create instance descriptor buffer
+    // Reuse instance descriptor buffer (only reallocate when instance count grows)
     let inst_desc_size = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
-    let inst_desc_buf = device.newBufferWithLength_options(
-        instances.len() * inst_desc_size,
-        MTLResourceOptions::StorageModeShared,
-    )?;
+    if tlas_state.inst_desc_capacity < instances.len() || tlas_state.inst_desc_buf.is_none() {
+        tlas_state.inst_desc_buf = device.newBufferWithLength_options(
+            instances.len() * inst_desc_size,
+            MTLResourceOptions::StorageModeShared,
+        );
+        tlas_state.inst_desc_capacity = if tlas_state.inst_desc_buf.is_some() { instances.len() } else { 0 };
+    }
+    let inst_desc_buf = tlas_state.inst_desc_buf.as_ref()?;
 
     // Fill instance descriptors
     let desc_ptr = inst_desc_buf.contents().as_ptr() as *mut MTLAccelerationStructureInstanceDescriptor;
@@ -269,7 +273,7 @@ fn build_tlas(
     // Create instance acceleration structure descriptor
     let tlas_desc = MTLInstanceAccelerationStructureDescriptor::descriptor();
     tlas_desc.setInstanceCount(instances.len());
-    tlas_desc.setInstanceDescriptorBuffer(Some(&inst_desc_buf));
+    tlas_desc.setInstanceDescriptorBuffer(Some(inst_desc_buf));
     unsafe {
         tlas_desc.setInstanceDescriptorBufferOffset(0);
     }
@@ -506,13 +510,17 @@ pub fn dispatch(
     // 1. Resolve domain instances into GPU-ready instances
     let (mut resolved, resolve_diag) = resolve_instances(instances, mesh_slotmap);
     if resolved.is_empty() {
+        eprintln!("[Rust Metal] WARNING: dispatch #{}: all {} instances failed to resolve", frame, instances.len());
         return;
     }
 
     // 2. Build combined triangle buffer (pre-allocated)
     let total_tris = match build_combined_triangle_buffer(device, mesh_slotmap, &mut resolved, frame_buffers) {
         Some(count) => count,
-        None => return,
+        None => {
+            eprintln!("[Rust Metal] WARNING: dispatch #{}: combined triangle buffer build failed", frame);
+            return;
+        }
     };
 
     // 3. Build/refit TLAS
@@ -520,6 +528,8 @@ pub fn dispatch(
     let tlas = build_tlas(device, command_queue, mesh_slotmap, &resolved, tlas_state);
     if tlas.is_some() {
         use_accel = 1;
+    } else {
+        eprintln!("[Rust Metal] WARNING: dispatch #{}: TLAS build failed, falling back to brute-force", frame);
     }
 
     // 4. Build texture remap for alpha cutout triangles

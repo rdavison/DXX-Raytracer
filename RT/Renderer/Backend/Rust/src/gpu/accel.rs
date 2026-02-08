@@ -147,6 +147,9 @@ pub fn build_blas(
 pub struct TlasState {
     pub tlas: [Option<GpuAccelStructure>; 2],
     pub scratch: [Option<Retained<ProtocolObject<dyn MTLBuffer>>>; 2],
+    /// Cached instance descriptor buffer for TLAS builds (avoids per-frame allocation).
+    pub inst_desc_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub inst_desc_capacity: usize,
 }
 
 impl TlasState {
@@ -154,6 +157,8 @@ impl TlasState {
         Self {
             tlas: [None, None],
             scratch: [None, None],
+            inst_desc_buf: None,
+            inst_desc_capacity: 0,
         }
     }
 }

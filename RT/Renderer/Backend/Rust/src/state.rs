@@ -200,6 +200,9 @@ pub struct MetalState {
     pub arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
     pub arg_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
 
+    // Pre-allocated fullscreen blit vertex buffer (avoids per-frame allocation in present_frame)
+    pub fullscreen_vb: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+
     // Bloom post-processing
     pub bloom_texture_a: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     pub bloom_texture_b: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
@@ -279,6 +282,9 @@ pub fn init(device_state: DeviceState) {
         // Bindless texture argument buffer (created in RT_RendererInit after white texture)
         arg_encoder: None,
         arg_buffer: None,
+
+        // Pre-allocated fullscreen blit VB (created lazily in present_frame)
+        fullscreen_vb: None,
 
         // Bloom post-processing (created in RT_RendererInit after raytrace pipeline)
         bloom_texture_a: None,
