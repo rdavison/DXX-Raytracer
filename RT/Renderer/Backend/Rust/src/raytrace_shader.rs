@@ -99,8 +99,36 @@ struct GPUMaterial {
     uint albedo_index;
     uint flags;
     uint emissive_factor;
-    uint _pad;
+    uint surface_type; // SurfaceType enum discriminant (0=Rock, 1=Metal, 2=Steel, 3=Plastic, 4=Rubber, 5=Emissive)
 };
+
+// Unpack surface_type enum into roughness/metalness.
+// Must stay in sync with SurfaceType in types.rs.
+inline float2 decode_surface(uint surface_type) {
+    switch (surface_type) {
+        case 0: return float2(0.8, 0.0);  // Rock
+        case 1: return float2(0.5, 1.0);  // Metal
+        case 2: return float2(0.3, 1.0);  // Steel
+        case 3: return float2(0.4, 0.0);  // Plastic
+        case 4: return float2(0.95, 0.0); // Rubber
+        case 5: return float2(1.0, 0.0);  // Emissive
+        default: return float2(0.8, 0.0); // fallback = Rock
+    }
+}
+
+// Per-surface wavelength filter: tints reflected light.
+// Rock absorbs blue, passing warm tones. Steel is cool-shifted. etc.
+inline float3 surface_reflection_tint(uint surface_type) {
+    switch (surface_type) {
+        case 0: return float3(1.15, 0.95, 0.70); // Rock: warm filter, absorbs blue
+        case 1: return float3(1.0, 1.0, 1.0);    // Metal: neutral (albedo already tints)
+        case 2: return float3(0.90, 0.95, 1.05);  // Steel: slight cool shift
+        case 3: return float3(1.0, 1.0, 0.95);   // Plastic: very slight warm
+        case 4: return float3(1.0, 0.95, 0.90);  // Rubber: slightly warm
+        case 5: return float3(1.0, 1.0, 1.0);    // Emissive: neutral
+        default: return float3(1.15, 0.95, 0.70); // fallback = Rock
+    }
+}
 
 // Bindless texture array via Metal Argument Buffer (Tier 2)
 constant uint RT_MAX_TEXTURES = 6030;
@@ -313,7 +341,7 @@ ShadowResult trace_shadow_visibility(
         intersector<triangle_data, instancing> shadow_i;
         shadow_i.accept_any_intersection(false);
         shadow_i.force_opacity(forced_opacity::opaque);
-        auto shadow_hit = shadow_i.intersect(shadow_ray, accel_struct, 0xFF);
+        auto shadow_hit = shadow_i.intersect(shadow_ray, accel_struct, 0x01);
 
         if (shadow_hit.type == intersection_type::none) break;
 
@@ -569,7 +597,7 @@ kernel void raytrace_main(
             isect.assume_geometry_type(geometry_type::triangle);
             isect.force_opacity(forced_opacity::opaque);
 
-            auto intersection = isect.intersect(r, accel_struct, 0xFF);
+            auto intersection = isect.intersect(r, accel_struct, 0x01);
 
             if (intersection.type == intersection_type::none) break;
 
@@ -621,15 +649,14 @@ kernel void raytrace_main(
                 }
 
                 if (bb_alpha >= scene.billboard_opacity_threshold) {
-                    // Opaque billboard/rod: self-lit with HDR boost + tonemapping
-                    float3 boosted = bb_color * scene.billboard_emissive_boost;
-                    float3 hdr = boosted + accum_color;
-                    float3 tonemapped = ApplyTonemappingCurve(hdr);
-                    final_color = float4(LinearTosRGB(tonemapped), 1.0);
+                    // Opaque billboard/rod: bright, clean, direct output (no tonemapping)
+                    float3 crisp = clamp(bb_color * 1.5, 0.0, 1.0);
+                    float3 result = crisp + accum_color;
+                    final_color = float4(LinearTosRGB(clamp(result, 0.0, 1.0)), 1.0);
                     break;
                 } else if (bb_alpha >= 0.1) {
-                    // Halo glow: translucent additive with emissive boost, continue ray
-                    accum_color += bb_color * bb_alpha * scene.billboard_emissive_boost;
+                    // Halo glow: subtle additive, continue ray
+                    accum_color += bb_color * bb_alpha * 1.5;
                     r.origin = r.origin + r.direction * (intersection.distance + 0.002);
                     continue;
                 } else {
@@ -727,6 +754,21 @@ kernel void raytrace_main(
                     albedo *= 0.88 + noise * 0.24;
                 }
             }
+
+            // Extract roughness/metalness/reflection tint from material
+            float roughness = 0.8;
+            float metalness = 0.0;
+            float3 refl_tint = float3(1.15, 0.95, 0.70); // default = Rock
+            uint surface_type_id = 0; // 0 = Rock
+            if (tri.material_edge_index != RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
+                uint surf_slot = resolve_material_index(tri.material_edge_index, material_edges, material_indices);
+                surface_type_id = gpu_materials[surf_slot].surface_type;
+                float2 rm = decode_surface(surface_type_id);
+                roughness = rm.x;
+                metalness = rm.y;
+                refl_tint = surface_reflection_tint(surface_type_id);
+            }
+            roughness = clamp(roughness, 0.05, 1.0);
 
             // Hemisphere ambient: cool blue from above, warm brown from below
             float hemisphere_blend = normal_world.y * 0.5 + 0.5; // 0=down, 1=up
@@ -830,38 +872,84 @@ kernel void raytrace_main(
 
                     total_light += light_emission * NdotL * attenuation * visibility;
 
-                    // Phong specular: use interpolated normal for smooth blending across triangles
-                    float3 R = reflect(-L, normal_world);
-                    float RdotV = max(dot(R, V), 0.0);
-                    float spec = pow(RdotV, 128.0);
+                    // Blinn-Phong specular with roughness-based shininess
+                    float3 H = normalize(L + V);
+                    float NdotH = max(dot(normal_world, H), 0.0);
+                    float shininess = 2.0 / (roughness * roughness * roughness * roughness) - 2.0;
+                    shininess = clamp(shininess, 1.0, 2048.0);
+                    float spec = pow(NdotH, shininess);
                     total_specular += light_emission * spec * attenuation * visibility;
+
+                    // Rock sparkle: rare crystal/mica flecks catching the light
+                    if (surface_type_id == 0 && NdotL > 0.1) {
+                        float sparkle_scale = 200.0; // finer grid = smaller crystals
+                        int3 sp = int3(floor(hit_pos * sparkle_scale));
+                        uint sparkle_seed = pcg_hash(
+                            uint(sp.x) * 73856093u ^ uint(sp.y) * 19349663u ^ uint(sp.z) * 83492791u);
+                        float sparkle_mask = float(sparkle_seed) / 4294967295.0;
+
+                        // ~0.8% of grid cells contain a crystal facet
+                        if (sparkle_mask > 0.992) {
+                            float3 crystal_offset = float3(
+                                rand_float(sparkle_seed + 3u) - 0.5,
+                                rand_float(sparkle_seed + 4u) - 0.5,
+                                rand_float(sparkle_seed + 5u) - 0.5) * 0.4;
+                            float3 crystal_n = normalize(normal_world + crystal_offset);
+
+                            float crystal_NdotH = max(dot(crystal_n, H), 0.0);
+                            float sparkle = pow(crystal_NdotH, 1200.0); // tighter highlight
+                            // Fade with distance so sparkles are only visible up close
+                            float sparkle_fade = 1.0 / (1.0 + hit_dist_total * hit_dist_total * 0.1);
+                            total_specular += light_emission * sparkle * attenuation * visibility * 2.0 * sparkle_fade;
+                        }
+                    }
                 }
             } else {
                 // Fallback: simple directional light when no lights submitted
                 float3 light_dir = normalize(float3(0.3, 1.0, 0.5));
                 float NdotL = max(dot(normal_world, light_dir), 0.0);
                 total_light = float3(NdotL * 0.85 + 0.15);
-                float3 R = reflect(-light_dir, normal_world);
-                float spec = pow(max(dot(R, V), 0.0), 128.0);
+                float3 H_fb = normalize(light_dir + V);
+                float shininess_fb = 2.0 / (roughness * roughness * roughness * roughness) - 2.0;
+                shininess_fb = clamp(shininess_fb, 1.0, 2048.0);
+                float spec = pow(max(dot(normal_world, H_fb), 0.0), shininess_fb);
                 total_specular = float3(spec * 0.5);
             }
 
-            // Lambertian BRDF + Phong specular (shininess=128, ks=0.5)
-            float3 hdr = (albedo / 2.0) * total_light + total_specular * 0.5;
+            // PBR-lite BRDF: metalness controls diffuse/specular balance
+            // Metals: no diffuse, specular tinted by albedo
+            // Dielectrics: full diffuse, white specular (0.04 base reflectivity)
+            // refl_tint filters reflected wavelengths per surface type (e.g. rock absorbs blue)
+            float3 diffuse = albedo * refl_tint * (1.0 - metalness) * total_light / 3.14159;
+            float3 spec_color = mix(float3(0.04), albedo, metalness);
+            float3 specular = spec_color * total_specular;
+            float3 hdr = diffuse + specular;
+            float emissive_blend = 0.0; // 0 = normal tonemapping, 1 = bypass for full-bright emissive
+            float lava_blend = 0.0;     // 1 = apply blackbody color ramp (lava only)
 
-            // Emissive contribution (self-illuminating surfaces glow regardless of lighting)
+            // Detect emissive surfaces (lights, lava, energy, keys, etc.)
             {
                 uint mei_raw = tri.material_edge_index;
                 if (mei_raw != RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
                     uint mat_slot = resolve_material_index(mei_raw, material_edges, material_indices);
+                    uint mflags = gpu_materials[mat_slot].flags;
                     uint ef = gpu_materials[mat_slot].emissive_factor;
-                    if (ef > 0u) {
-                        float strength = float(ef) / 255.0;
-                        if (strength >= 0.9) {
-                            hdr = albedo * strength;  // blackbody: albedo IS the light
-                        } else {
-                            hdr += albedo * strength; // partial emissive: additive
+                    bool is_blackbody = (mflags & 0x1u) != 0;
+                    if (is_blackbody) {
+                        // All blackbody surfaces: self-illuminating, bypass tonemapping
+                        float strength = (ef > 0u) ? float(ef) / 255.0 : 1.0;
+                        hdr = albedo * strength * 3.0;
+                        emissive_blend = 1.0;
+                        // Lava detection: high saturation + warm (red-dominant) color
+                        float cmax = max(max(albedo.r, albedo.g), albedo.b);
+                        float cmin = min(min(albedo.r, albedo.g), albedo.b);
+                        float sat = (cmax > 0.01) ? (cmax - cmin) / cmax : 0.0;
+                        if (sat > 0.5 && albedo.r > albedo.b * 2.0 && cmax > 0.05) {
+                            lava_blend = 1.0;
                         }
+                    } else if (ef > 0u) {
+                        float strength = float(ef) / 255.0;
+                        hdr += albedo * strength;
                     }
                 }
             }
@@ -871,128 +959,204 @@ kernel void raytrace_main(
                 hdr = albedo * scene.billboard_emissive_boost;
             }
 
-            // Single-bounce specular reflection (nearby geometry bleeds into surfaces)
-            // Reflection ray skips billboards and alpha cutouts (bounce loop)
-            if (scene.use_accel != 0) {
-                float3 refl_dir = reflect(dir, normal_world);
-                ray refl_ray;
-                refl_ray.origin = hit_pos + normal_world * 0.01;
-                refl_ray.direction = refl_dir;
-                refl_ray.min_distance = 0.001;
-                refl_ray.max_distance = 200.0;
+            // Multi-sample specular reflection with roughness-based diffusion.
+            // Smooth surfaces: 1 ray (mirror). Rough surfaces: stratified jittered rays
+            // in tangent space for even coverage of the blur cone. Skip emissive.
+            if (scene.use_accel != 0 && emissive_blend < 0.5) {
+                float3 refl_dir_base = reflect(dir, normal_world);
+                float spread = roughness * roughness * 0.25;
 
-                bool refl_found = false;
-                uint r_inst_id = 0;
-                uint r_prim_id = 0;
-                float2 r_bary;
-                float r_total_dist = 0.0;
-
-                // Bounce loop: skip billboards and alpha cutouts
-                for (int rb = 0; rb < 4; rb++) {
-                    intersector<triangle_data, instancing> refl_i;
-                    refl_i.assume_geometry_type(geometry_type::triangle);
-                    refl_i.force_opacity(forced_opacity::opaque);
-                    auto refl_hit = refl_i.intersect(refl_ray, accel_struct, 0xFF);
-
-                    if (refl_hit.type == intersection_type::none) break;
-
-                    uint ri = refl_hit.instance_id;
-                    uint rp = refl_hit.primitive_id;
-                    constant Instance& ri_inst = instances[ri];
-                    uint ri_tri_idx = ri_inst.triangle_offset + rp;
-                    constant Triangle& ri_tri = triangles[ri_tri_idx];
-
-                    // Skip billboards/rods (gas/plasma doesn't reflect)
-                    if (ri_tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
-                        refl_ray.origin = refl_ray.origin + refl_ray.direction * (refl_hit.distance + 0.002);
-                        r_total_dist += refl_hit.distance + 0.002;
-                        continue;
-                    }
-
-                    // Skip alpha cutouts
-                    float2 rb_bary = refl_hit.triangle_barycentric_coord;
-                    float rb_w0 = 1.0 - rb_bary.x - rb_bary.y;
-                    float2 rb_uv = float2(ri_tri.uv0) * rb_w0 + float2(ri_tri.uv1) * rb_bary.x + float2(ri_tri.uv2) * rb_bary.y;
-                    if (should_skip_cutout(ri_tri.material_edge_index, rb_uv,
-                            material_edges, material_indices, gpu_materials,
-                            texture_remap, remap_table_size, alpha_textures, tex_sampler)) {
-                        refl_ray.origin = refl_ray.origin + refl_ray.direction * (refl_hit.distance + 0.002);
-                        r_total_dist += refl_hit.distance + 0.002;
-                        continue;
-                    }
-
-                    // Solid geometry hit
-                    refl_found = true;
-                    r_inst_id = ri;
-                    r_prim_id = rp;
-                    r_bary = rb_bary;
-                    r_total_dist += refl_hit.distance;
-                    break;
+                // Build tangent frame around reflection direction for 2D stratified sampling
+                float3 refl_T, refl_B;
+                if (abs(refl_dir_base.y) < 0.99) {
+                    refl_T = normalize(cross(refl_dir_base, float3(0, 1, 0)));
+                } else {
+                    refl_T = normalize(cross(refl_dir_base, float3(1, 0, 0)));
                 }
+                refl_B = cross(refl_dir_base, refl_T);
 
-                if (refl_found) {
-                    constant Instance& r_inst = instances[r_inst_id];
-                    uint r_tri_idx = r_inst.triangle_offset + r_prim_id;
-                    constant Triangle& r_tri = triangles[r_tri_idx];
+                uint num_refl_samples = (roughness > 0.15) ? 4u : 1u;
+                float3 refl_accum = float3(0.0);
+                uint refl_hits = 0;
 
-                    float r_w0 = 1.0 - r_bary.x - r_bary.y;
-                    float3 r_normal_local = normalize(r_tri.norm0 * r_w0 + r_tri.norm1 * r_bary.x + r_tri.norm2 * r_bary.y);
-                    float3x3 r_nmat = float3x3(r_inst.world_to_object[0].xyz, r_inst.world_to_object[1].xyz, r_inst.world_to_object[2].xyz);
-                    float3 r_normal = normalize(transpose(r_nmat) * r_normal_local);
-                    if (dot(r_normal, refl_dir) > 0.0) r_normal = -r_normal;
+                // Stratified 2x2 quadrant offsets: ensures samples cover the full cone
+                // instead of random clumping. Per-frame sub-stratum jitter for temporal variation.
+                const float2 strata[4] = {
+                    float2(-0.5, -0.5), float2(0.5, -0.5),
+                    float2(-0.5,  0.5), float2(0.5,  0.5)
+                };
 
-                    float2 r_uv = float2(r_tri.uv0) * r_w0 + float2(r_tri.uv1) * r_bary.x + float2(r_tri.uv2) * r_bary.y;
-                    float3 r_hit_pos = refl_ray.origin + refl_dir * r_total_dist;
+                for (uint rs = 0; rs < num_refl_samples; rs++) {
+                    float3 refl_dir = refl_dir_base;
 
-                    // Reflection albedo from texture
-                    float4 r_inst_color = decode_color(r_inst.color);
-                    float3 r_albedo = (decode_color(r_tri.color) * r_inst_color).rgb;
-                    uint r_mat = resolve_material_index(r_tri.material_edge_index, material_edges, material_indices);
-                    uint r_tex = gpu_materials[r_mat].albedo_index;
-                    float4 r_samp = sample_bindless(r_tex, r_uv, tex_array, tex_sampler);
-                    if (r_samp.a > 0.0) r_albedo = r_samp.rgb * r_inst_color.rgb;
-
-                    // Basic diffuse shading at reflection hit (no shadows for perf)
-                    float3 r_light = float3(0.05);
-                    uint r_tile_x = gid.x / TILE_SIZE;
-                    uint r_tile_y = gid.y / TILE_SIZE;
-                    uint r_tile_idx = r_tile_y * ((scene.render_width + TILE_SIZE - 1) / TILE_SIZE) + r_tile_x;
-                    uint r_tile_base = r_tile_idx * TILE_STRIDE;
-                    uint r_tile_count = min(tile_light_data[r_tile_base], MAX_LIGHTS_PER_TILE);
-                    for (uint rli = 0; rli < r_tile_count; rli++) {
-                        uint li = tile_light_data[r_tile_base + 1 + rli];
-                        float3 lp = float3(lights[li].transform[3], lights[li].transform[7], lights[li].transform[11]);
-                        float3 to_l = lp - r_hit_pos;
-                        float d2 = dot(to_l, to_l);
-                        float3 le = decode_rgbe(lights[li].emission);
-                        float em = max(max(le.r, le.g), le.b);
-                        if (d2 > em * 100.0) continue;
-                        float d = sqrt(d2);
-                        if (d < 0.001) continue;
-                        float ndl = max(dot(r_normal, to_l / d), 0.0);
-                        r_light += le * ndl / max(d2, 1.0);
+                    if (roughness > 0.05) {
+                        uint jitter_seed = (gid.y * scene.render_width + gid.x) * 7919u
+                                         + scene.frame_number * 1087u + rs * 3571u;
+                        // Sub-stratum jitter within each quadrant (±0.5 range → ±0.25 within stratum)
+                        float2 sub_jitter = float2(rand_float(jitter_seed) - 0.5,
+                                                   rand_float(jitter_seed + 1u) - 0.5) * 0.5;
+                        float2 sample_pt = (num_refl_samples > 1u)
+                            ? (strata[rs] + sub_jitter) * spread
+                            : float2(rand_float(jitter_seed) - 0.5, rand_float(jitter_seed + 1u) - 0.5) * spread;
+                        refl_dir = normalize(refl_dir_base + refl_T * sample_pt.x + refl_B * sample_pt.y);
+                        if (dot(refl_dir, normal_world) < 0.0)
+                            refl_dir = normalize(refl_dir + normal_world * 0.5);
                     }
 
-                    float3 r_color = (r_albedo / 3.14159) * r_light;
+                    ray refl_ray;
+                    refl_ray.origin = hit_pos + normal_world * 0.01;
+                    refl_ray.direction = refl_dir;
+                    refl_ray.min_distance = 0.001;
+                    refl_ray.max_distance = 200.0;
 
-                    // Schlick Fresnel: more reflection at grazing angles
+                    bool refl_found = false;
+                    uint r_inst_id = 0;
+                    uint r_prim_id = 0;
+                    float2 r_bary;
+                    float r_total_dist = 0.0;
+
+                    // Bounce loop: skip billboards and alpha cutouts
+                    for (int rb = 0; rb < 4; rb++) {
+                        intersector<triangle_data, instancing> refl_i;
+                        refl_i.assume_geometry_type(geometry_type::triangle);
+                        refl_i.force_opacity(forced_opacity::opaque);
+                        auto refl_hit = refl_i.intersect(refl_ray, accel_struct, 0xFF);
+
+                        if (refl_hit.type == intersection_type::none) break;
+
+                        uint ri = refl_hit.instance_id;
+                        uint rp = refl_hit.primitive_id;
+                        constant Instance& ri_inst = instances[ri];
+                        uint ri_tri_idx = ri_inst.triangle_offset + rp;
+                        constant Triangle& ri_tri = triangles[ri_tri_idx];
+
+                        if (ri_tri.material_edge_index == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
+                            refl_ray.origin = refl_ray.origin + refl_ray.direction * (refl_hit.distance + 0.002);
+                            r_total_dist += refl_hit.distance + 0.002;
+                            continue;
+                        }
+
+                        float2 rb_bary = refl_hit.triangle_barycentric_coord;
+                        float rb_w0 = 1.0 - rb_bary.x - rb_bary.y;
+                        float2 rb_uv = float2(ri_tri.uv0) * rb_w0 + float2(ri_tri.uv1) * rb_bary.x + float2(ri_tri.uv2) * rb_bary.y;
+                        if (should_skip_cutout(ri_tri.material_edge_index, rb_uv,
+                                material_edges, material_indices, gpu_materials,
+                                texture_remap, remap_table_size, alpha_textures, tex_sampler)) {
+                            refl_ray.origin = refl_ray.origin + refl_ray.direction * (refl_hit.distance + 0.002);
+                            r_total_dist += refl_hit.distance + 0.002;
+                            continue;
+                        }
+
+                        refl_found = true;
+                        r_inst_id = ri;
+                        r_prim_id = rp;
+                        r_bary = rb_bary;
+                        r_total_dist += refl_hit.distance;
+                        break;
+                    }
+
+                    if (refl_found) {
+                        constant Instance& r_inst = instances[r_inst_id];
+                        uint r_tri_idx = r_inst.triangle_offset + r_prim_id;
+                        constant Triangle& r_tri = triangles[r_tri_idx];
+
+                        float r_w0 = 1.0 - r_bary.x - r_bary.y;
+                        float3 r_normal_local = normalize(r_tri.norm0 * r_w0 + r_tri.norm1 * r_bary.x + r_tri.norm2 * r_bary.y);
+                        float3x3 r_nmat = float3x3(r_inst.world_to_object[0].xyz, r_inst.world_to_object[1].xyz, r_inst.world_to_object[2].xyz);
+                        float3 r_normal = normalize(transpose(r_nmat) * r_normal_local);
+                        if (dot(r_normal, refl_dir) > 0.0) r_normal = -r_normal;
+
+                        float2 r_uv = float2(r_tri.uv0) * r_w0 + float2(r_tri.uv1) * r_bary.x + float2(r_tri.uv2) * r_bary.y;
+                        float3 r_hit_pos = refl_ray.origin + refl_dir * r_total_dist;
+
+                        float4 r_inst_color = decode_color(r_inst.color);
+                        float3 r_albedo = (decode_color(r_tri.color) * r_inst_color).rgb;
+                        uint r_mat = resolve_material_index(r_tri.material_edge_index, material_edges, material_indices);
+                        uint r_tex = gpu_materials[r_mat].albedo_index;
+                        float4 r_samp = sample_bindless(r_tex, r_uv, tex_array, tex_sampler);
+                        if (r_samp.a > 0.0) r_albedo = r_samp.rgb * r_inst_color.rgb;
+
+                        float3 r_light = float3(0.05);
+                        uint r_tile_x = gid.x / TILE_SIZE;
+                        uint r_tile_y = gid.y / TILE_SIZE;
+                        uint r_tile_idx = r_tile_y * ((scene.render_width + TILE_SIZE - 1) / TILE_SIZE) + r_tile_x;
+                        uint r_tile_base = r_tile_idx * TILE_STRIDE;
+                        uint r_tile_count = min(tile_light_data[r_tile_base], MAX_LIGHTS_PER_TILE);
+                        for (uint rli = 0; rli < r_tile_count; rli++) {
+                            uint li = tile_light_data[r_tile_base + 1 + rli];
+                            float3 lp = float3(lights[li].transform[3], lights[li].transform[7], lights[li].transform[11]);
+                            float3 to_l = lp - r_hit_pos;
+                            float d2 = dot(to_l, to_l);
+                            float3 le = decode_rgbe(lights[li].emission);
+                            float em = max(max(le.r, le.g), le.b);
+                            if (d2 > em * 100.0) continue;
+                            float d = sqrt(d2);
+                            if (d < 0.001) continue;
+                            float ndl = max(dot(r_normal, to_l / d), 0.0);
+                            r_light += le * ndl / max(d2, 1.0);
+                        }
+
+                        float3 r_color = (r_albedo / 3.14159) * r_light;
+
+                        uint r_flags = gpu_materials[r_mat].flags;
+                        if ((r_flags & 0x1u) != 0) {
+                            float r_ef = float(gpu_materials[r_mat].emissive_factor) / 255.0;
+                            r_color = r_albedo * r_ef * 3.0;
+                        }
+
+                        if (r_inst.object_type == 4u) {
+                            r_color *= 0.35;
+                        }
+
+                        refl_accum += r_color;
+                        refl_hits++;
+                    }
+                } // end sample loop
+
+                if (refl_hits > 0) {
+                    float3 r_color_avg = refl_accum / float(refl_hits);
+
+                    // Schlick Fresnel: metals reflect more, dielectrics reflect at grazing angles
                     float cos_theta = max(dot(-dir, normal_world), 0.0);
-                    float f0 = 0.04; // dielectric base reflectivity
-                    float fresnel = f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
+                    float f0_base = mix(0.04, 1.0, metalness);
+                    float fresnel = f0_base + (1.0 - f0_base) * pow(1.0 - cos_theta, 5.0);
+                    fresnel *= (1.0 - roughness * 0.5);
 
-                    hdr = mix(hdr, r_color, fresnel);
+                    hdr = mix(hdr, r_color_avg, fresnel);
                 }
             }
 
             hdr *= exp2(0.1); // exposure
-            float3 shaded = ApplyTonemappingCurve(hdr);
+            float3 tonemapped = ApplyTonemappingCurve(hdr);
+
+            // Emissive output: either lava color ramp or boosted albedo
+            float3 emissive_out = hdr; // default: boosted albedo (for lights, keys, etc.)
+            if (lava_blend > 0.5) {
+                // Lava: blackbody color ramp based on texture luminance as heat
+                float heat = dot(albedo, float3(0.299, 0.587, 0.114));
+                float max_c = max(max(albedo.r, albedo.g), albedo.b);
+                heat = (max_c > 0.01) ? heat / max_c : heat;
+                heat = clamp(heat * 1.8, 0.0, 1.0);
+                // Blackbody ramp: red → bright orange → yellow → white-hot
+                if (heat < 0.3) {
+                    float t = heat / 0.3;
+                    emissive_out = mix(float3(0.6, 0.03, 0.0), float3(1.0, 0.25, 0.0), t);
+                } else if (heat < 0.6) {
+                    float t = (heat - 0.3) / 0.3;
+                    emissive_out = mix(float3(1.0, 0.25, 0.0), float3(1.0, 0.7, 0.1), t);
+                } else {
+                    float t = (heat - 0.6) / 0.4;
+                    emissive_out = mix(float3(1.0, 0.7, 0.1), float3(1.0, 1.0, 0.85), t);
+                }
+            }
+            float3 shaded = mix(tonemapped, emissive_out, emissive_blend);
 
             // Additive billboard glow on top of shaded background
-            float3 blended = shaded + accum_color;
+            float3 blended = clamp(shaded + accum_color, 0.0, 1.0);
             final_color = float4(LinearTosRGB(blended), 1.0);
         } else if (accum_color.r + accum_color.g + accum_color.b > 0.0) {
             // Only billboard glow, no solid background
-            final_color = float4(LinearTosRGB(accum_color), 1.0);
+            final_color = float4(LinearTosRGB(clamp(accum_color, 0.0, 1.0)), 1.0);
         }
     } else {
         // Brute-force fallback (no shadow rays without TLAS)
@@ -1075,9 +1239,9 @@ kernel void bloom_threshold(
     float4 s3 = input.read(src + uint2(1, 1));
     float3 avg = (s0.rgb + s1.rgb + s2.rgb + s3.rgb) * 0.25;
 
-    // Luminance-based soft threshold
+    // Luminance-based soft threshold (lower knee to catch lava glow)
     float lum = dot(avg, float3(0.2126, 0.7152, 0.0722));
-    float knee = smoothstep(0.6, 1.0, lum);
+    float knee = smoothstep(0.4, 0.8, lum);
     float3 bloom = avg * knee;
 
     output.write(float4(bloom, 1.0), gid);

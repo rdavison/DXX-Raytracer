@@ -212,9 +212,9 @@ mod tests {
             mat_indices.push(i as u16);
             gpu_mats.push(GPUMaterial {
                 albedo_index: i + 1, // nonzero
-                flags: 0,
+                flags: MaterialFlags::NONE,
                 emissive_factor: 0,
-                _pad: 0,
+                surface_type: SurfaceType::default(),
             });
         }
 

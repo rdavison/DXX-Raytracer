@@ -261,13 +261,36 @@ impl Default for ResourceHandle {
 }
 
 // ============================================================================
+// Texture format — must match RT_TextureFormat in ApiTypes.h
+// ============================================================================
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextureFormat {
+    #[default]
+    RGBA8     = 0,
+    RGBA8Srgb = 1,
+    R8        = 2,
+    BC1       = 3,
+    BC1Srgb   = 4,
+    BC2       = 5,
+    BC2Srgb   = 6,
+    BC3       = 7,
+    BC3Srgb   = 8,
+    BC4       = 9,
+    BC5       = 10,
+    BC7       = 11,
+    BC7Srgb   = 12,
+}
+
+// ============================================================================
 // Image (ApiTypes.h)
 // ============================================================================
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Image {
-    pub format: u32, // RT_TextureFormat enum
+    pub format: TextureFormat,
     pub width: u32,
     pub height: u32,
     pub pitch: u32,
@@ -296,13 +319,25 @@ pub struct RasterLineVertex {
 }
 
 // ============================================================================
+// Light kind — must match RT_LightKind in ApiTypes.h
+// ============================================================================
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LightKind {
+    #[default]
+    AreaSphere = 0,
+    AreaRect   = 1,
+}
+
+// ============================================================================
 // Light (ApiTypes.h)
 // ============================================================================
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Light {
-    pub kind: u8,
+    pub kind: LightKind,
     pub spot_angle: u8,
     pub spot_softness: u8,
     pub spot_vignette: u8,
@@ -386,17 +421,70 @@ pub struct UploadMeshParams {
     pub name: *const i8,
 }
 
+// ============================================================================
+// Render mesh flags — must match RT_RenderMeshFlags in Renderer.h
+// ============================================================================
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RenderMeshFlags(pub u32);
+
+impl RenderMeshFlags {
+    pub const NONE: Self = Self(0);
+    pub const REVERSE_CULLING: Self = Self(0x1);
+    pub const TELEPORT: Self = Self(0x2);
+
+    pub fn contains(self, flag: Self) -> bool {
+        (self.0 & flag.0) != 0
+    }
+}
+
+// ============================================================================
+// Object type — must match OBJ_* enum in object.h
+// ============================================================================
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ObjectType {
+    #[default]
+    Wall     = 0,
+    Fireball = 1,
+    Robot    = 2,
+    Hostage  = 3,
+    Player   = 4,
+    Weapon   = 5,
+    Camera   = 6,
+    Powerup  = 7,
+    None     = 255,
+}
+
+impl ObjectType {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => Self::Wall,
+            1 => Self::Fireball,
+            2 => Self::Robot,
+            3 => Self::Hostage,
+            4 => Self::Player,
+            5 => Self::Weapon,
+            6 => Self::Camera,
+            7 => Self::Powerup,
+            _ => Self::None,
+        }
+    }
+}
+
 #[repr(C)]
 pub struct RenderMeshParams {
     pub key_signature: i32,
     pub key_submodel_index: i32,
-    pub flags: u32,
+    pub flags: RenderMeshFlags,
     pub mesh_handle: ResourceHandle,
     pub transform: *const Mat4,
     pub prev_transform: *const Mat4,
     pub color: u32,
     pub material_override: u16,
-    pub object_type: u8,
+    pub object_type: ObjectType,
 }
 
 #[repr(C)]
@@ -411,13 +499,58 @@ pub struct DoRendererDebugMenuParams {
     pub ui_has_cursor_focus: bool,
 }
 
+// ============================================================================
+// Shadow mode — controls shadow ray strategy in the raytrace shader
+// ============================================================================
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShadowMode {
+    Hard        = 0,
+    MultiSample = 1,
+    #[default]
+    Analytic    = 2,
+}
+
+// ============================================================================
+// Debug render mode — must match RT_DebugRenderMode in Renderer.h
+// ============================================================================
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DebugRenderMode {
+    #[default]
+    None              = 0,
+    Normals           = 1,
+    Depth             = 2,
+    Albedo            = 3,
+    Emissive          = 4,
+    Diffuse           = 5,
+    Specular          = 6,
+    Motion            = 7,
+    MetallicRoughness = 8,
+    HistoryLength     = 9,
+    Materials         = 10,
+    FirstMoment       = 11,
+    SecondMoment      = 12,
+    Variance          = 13,
+    Bloom0            = 14,
+    Bloom1            = 15,
+    Bloom2            = 16,
+    Bloom3            = 17,
+    Bloom4            = 18,
+    Bloom5            = 19,
+    Bloom6            = 20,
+    Bloom7            = 21,
+}
+
 #[repr(C)]
 pub struct RendererIO {
     pub scene_transition: bool,
     pub debug_line_depth_enabled: bool,
     pub screen_overlay_color: Vec4,
     pub delta_time: f32,
-    pub debug_render_mode: i32,
+    pub debug_render_mode: DebugRenderMode,
     pub config: *mut c_void,
     pub frame_frozen: bool,
 }
@@ -429,7 +562,7 @@ impl Default for RendererIO {
             debug_line_depth_enabled: false,
             screen_overlay_color: Vec4 { x: 0.0, y: 0.0, z: 0.0, w: 0.0 },
             delta_time: 0.0,
-            debug_render_mode: 0,
+            debug_render_mode: DebugRenderMode::None,
             config: std::ptr::null_mut(),
             frame_frozen: false,
         }
@@ -437,6 +570,72 @@ impl Default for RendererIO {
 }
 
 // ============================================================================
+// Surface material type — controls roughness and metalness on the GPU.
+// Stored as a u32 discriminant so it can be uploaded directly to the GPU buffer.
+// Using an enum gives us exhaustiveness checks on the Rust side.
+// ============================================================================
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SurfaceType {
+    #[default]
+    Rock      = 0, // rough dielectric:    roughness=0.8, metalness=0.0
+    Metal     = 1, // smooth metal:        roughness=0.5, metalness=1.0
+    Steel     = 2, // polished metal:      roughness=0.3, metalness=1.0
+    Plastic   = 3, // smooth dielectric:   roughness=0.4, metalness=0.0
+    Rubber    = 4, // very rough:          roughness=0.95, metalness=0.0
+    Emissive  = 5, // self-lit (lava, lights): roughness=1.0, metalness=0.0
+}
+
+impl SurfaceType {
+    /// Classify from C-side roughness/metalness floats.
+    pub fn from_material(roughness: f32, metalness: f32, is_emissive: bool) -> Self {
+        if is_emissive {
+            return Self::Emissive;
+        }
+        if metalness > 0.5 {
+            if roughness < 0.4 {
+                Self::Steel
+            } else {
+                Self::Metal
+            }
+        } else if roughness > 0.7 {
+            if roughness > 0.9 {
+                Self::Rubber
+            } else {
+                Self::Rock
+            }
+        } else {
+            Self::Plastic
+        }
+    }
+}
+
+// ============================================================================
+// Material flags — must match RT_MaterialFlags in Renderer.h
+// ============================================================================
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MaterialFlags(pub u32);
+
+impl MaterialFlags {
+    pub const NONE: Self = Self(0);
+    pub const BLACKBODY_RADIATOR: Self = Self(0x1);
+    pub const NO_CASTING_SHADOW: Self = Self(0x2);
+    pub const LIGHT: Self = Self(0x4);
+    pub const FSR2_REACTIVE_MASK: Self = Self(0x8);
+    pub const ALPHA_CUTOUT: Self = Self(0x10);
+
+    pub fn contains(self, flag: Self) -> bool {
+        (self.0 & flag.0) != 0
+    }
+
+    pub fn is_blackbody(self) -> bool {
+        self.contains(Self::BLACKBODY_RADIATOR)
+    }
+}
+
 // GPU Material (uploaded to GPU for shader texture lookup)
 // ============================================================================
 
@@ -444,9 +643,9 @@ impl Default for RendererIO {
 #[derive(Clone, Copy, Default)]
 pub struct GPUMaterial {
     pub albedo_index: u32,
-    pub flags: u32,
+    pub flags: MaterialFlags,
     pub emissive_factor: u32,
-    pub _pad: u32,
+    pub surface_type: SurfaceType,
 }
 
 // ============================================================================
@@ -461,7 +660,7 @@ pub struct Material {
     pub roughness: f32,
     pub emissive_color: Vec3,
     pub emissive_strength: f32,
-    pub flags: u32,
+    pub flags: MaterialFlags,
     pub always_load_texture: bool,
     pub texture_load_state: u32,
     pub texture_load_state_next: u32,

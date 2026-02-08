@@ -3,7 +3,7 @@
 //! The raw `Light` struct from C packs kind, spot parameters, and emission
 //! into a compact format. These types parse that into a typed enum.
 
-use crate::types::{Light, Mat34, Vec3};
+use crate::types::{Light, LightKind, Mat34, Vec3};
 
 /// A parsed light with typed variant.
 #[derive(Clone, Debug)]
@@ -39,7 +39,7 @@ impl ParsedLight {
         let emission = [r, g, b];
 
         match raw.kind {
-            1 => {
+            LightKind::AreaRect => {
                 let direction = forward_from_transform(&raw.transform);
                 let angle = raw.spot_angle as f32 / 255.0 * std::f32::consts::PI;
                 let softness = raw.spot_softness as f32 / 255.0;
@@ -51,7 +51,7 @@ impl ParsedLight {
                     softness,
                 }
             }
-            _ => ParsedLight::Point { position, emission },
+            LightKind::AreaSphere => ParsedLight::Point { position, emission },
         }
     }
 }
@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn point_light_parsing() {
         let raw = Light {
-            kind: 0,
+            kind: LightKind::AreaSphere,
             spot_angle: 0,
             spot_softness: 0,
             spot_vignette: 0,
@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn spot_light_parsing() {
         let raw = Light {
-            kind: 1,
+            kind: LightKind::AreaRect,
             spot_angle: 128,
             spot_softness: 64,
             spot_vignette: 0,

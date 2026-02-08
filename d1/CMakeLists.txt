@@ -358,17 +358,16 @@ add_dependencies(descent1 game_copy_custom_assets)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/d1/assets" DESTINATION ${CMAKE_INSTALL_BINDIR})
 else()
 
-#copy only the splash screens for OpenGL.
-add_custom_target(game_copy_splash_logo ALL
+#copy custom assets (textures/*.material files, splash logos, etc.)
+add_custom_target(game_copy_custom_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${PROJECT_SOURCE_DIR}/assets/splash-logo"
-    ${PROJECT_BINARY_DIR}/assets/splash-logo
+    "${PROJECT_SOURCE_DIR}/assets"
+    ${PROJECT_BINARY_DIR}/assets
     COMMENT "Copying Descent custom assets folder to output d1 folder")
 
-	
-install(DIRECTORY "${PROJECT_SOURCE_DIR}/d1/assets/splash-logo" DESTINATION ${CMAKE_INSTALL_BINDIR}/assets/splash-logo)
+add_dependencies(descent1 game_copy_custom_assets)
 
-add_dependencies(descent1 game_copy_splash_logo)
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/d1/assets" DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
 

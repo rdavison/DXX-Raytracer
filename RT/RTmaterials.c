@@ -541,6 +541,9 @@ void RT_InitAllBitmaps(void)
 			{
 				material->flags |= RT_MaterialFlag_AlphaCutout;
 			}
+
+			// Upload material flags (emissive/blackbody) to GPU immediately
+			RT_UpdateMaterial(bm_index, material);
 		}
 
 		RT_SyncMaterialStates();
@@ -759,9 +762,10 @@ void RT_SyncMaterialStates(void)
 		if (!RT_RESOURCE_HANDLE_VALID(material->albedo_texture))
 		{
 			RT_LoadOriginalBitmapAsAlbedo(bm_index, material, bitmap_name);
-
-			RT_UpdateMaterial(bm_index, material);
 		}
+
+		// Always sync material flags/emissive to GPU (needed for blackbody detection)
+		RT_UpdateMaterial(bm_index, material);
 	}
 
 	piggy_bitmap_page_out_all();

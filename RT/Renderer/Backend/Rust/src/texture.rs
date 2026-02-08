@@ -7,12 +7,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::*;
 
-use crate::types::{ResourceHandle, UploadTextureParams};
-
-// Texture format enum values matching RT_TextureFormat in ApiTypes.h
-const RT_TEXTURE_FORMAT_RGBA8: u32 = 0;
-const RT_TEXTURE_FORMAT_RGBA8_SRGB: u32 = 1;
-const RT_TEXTURE_FORMAT_R8: u32 = 2;
+use crate::types::{ResourceHandle, TextureFormat, UploadTextureParams};
 
 /// A single slot in the texture slotmap.
 struct TextureSlot {
@@ -126,13 +121,13 @@ pub fn upload_texture(
 
     // Map format
     let (pixel_format, bpp) = match image.format {
-        RT_TEXTURE_FORMAT_RGBA8 => (MTLPixelFormat::RGBA8Unorm, 4u32),
-        RT_TEXTURE_FORMAT_RGBA8_SRGB => (MTLPixelFormat::RGBA8Unorm_sRGB, 4),
-        RT_TEXTURE_FORMAT_R8 => (MTLPixelFormat::R8Unorm, 1),
-        _ => {
+        TextureFormat::RGBA8 => (MTLPixelFormat::RGBA8Unorm, 4u32),
+        TextureFormat::RGBA8Srgb => (MTLPixelFormat::RGBA8Unorm_sRGB, 4),
+        TextureFormat::R8 => (MTLPixelFormat::R8Unorm, 1),
+        other => {
             eprintln!(
-                "[Rust Metal] WARNING: Unsupported texture format {}",
-                image.format
+                "[Rust Metal] WARNING: Unsupported texture format {:?}",
+                other
             );
             return ResourceHandle::NULL;
         }

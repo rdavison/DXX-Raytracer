@@ -44,7 +44,10 @@ fragment float4 tri_fragment(TriVertexOut in [[stage_in]],
                              sampler samp [[sampler(0)]]) {
     float4 texColor = tex.sample(samp, in.uv);
     float3 bloom = bloom_tex.sample(samp, in.uv).rgb;
-    return float4(texColor.rgb * (1.0 + bloom * 0.35), texColor.a) * in.color;
+    // Reduce bloom on already-bright pixels (lava etc.) to prevent white blowout
+    float base_lum = dot(texColor.rgb, float3(0.299, 0.587, 0.114));
+    float bloom_weight = 0.6 * saturate(1.0 - base_lum);
+    return float4(texColor.rgb + bloom * bloom_weight, texColor.a) * in.color;
 }
 
 // ---- Line shaders ----

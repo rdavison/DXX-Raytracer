@@ -53,9 +53,9 @@ pub struct RaytraceSceneConstants {
     pub render_height: u32,
     pub instance_count: u32,
     pub total_triangles: u32,
-    pub shadow_mode: u32,    // 0=hard, 1=multi-sample, 2=analytic
+    pub shadow_mode: ShadowMode,
     pub frame_number: u32,   // RNG seed, incremented each frame
-    pub debug_mode: u32,
+    pub debug_mode: DebugRenderMode,
     pub texture_count: u32,
     pub use_accel: u32,
     pub light_count: u32,
@@ -244,10 +244,14 @@ fn build_tlas(
             ],
         };
 
+        // Player ship: visible only to reflection rays (mask 0x02)
+        // All other instances: visible to all ray types (mask 0xFF)
+        let mask: u32 = if inst.gpu.object_type == ObjectType::Player as u32 { 0x02 } else { 0xFF };
+
         let desc = MTLAccelerationStructureInstanceDescriptor {
             transformationMatrix: transform,
             options: MTLAccelerationStructureInstanceOptions::Opaque,
-            mask: 0xFF,
+            mask,
             intersectionFunctionTableOffset: 0,
             accelerationStructureIndex: blas_idx,
         };
@@ -567,9 +571,9 @@ pub fn dispatch(
         render_height,
         instance_count: resolved.len() as u32,
         total_triangles: total_tris,
-        shadow_mode: 2,           // analytic soft shadows by default
+        shadow_mode: ShadowMode::Analytic,
         frame_number: frame as u32,
-        debug_mode: 0,
+        debug_mode: DebugRenderMode::None,
         texture_count: remap.textures.len() as u32,
         use_accel,
         light_count: lights.len() as u32,

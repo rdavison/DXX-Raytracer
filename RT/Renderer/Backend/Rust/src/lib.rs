@@ -249,7 +249,7 @@ pub extern "C" fn RT_GetRendererIO() -> *mut RendererIO {
             debug_line_depth_enabled: false,
             screen_overlay_color: Vec4 { x: 0.0, y: 0.0, z: 0.0, w: 0.0 },
             delta_time: 0.0,
-            debug_render_mode: 0,
+            debug_render_mode: DebugRenderMode::None,
             config: std::ptr::null_mut(),
             frame_frozen: false,
         };
@@ -560,12 +560,15 @@ pub extern "C" fn RT_UpdateMaterial(material_index: u16, material: *const Materi
         let gpu_mat = &mut s.gpu_materials[idx.as_usize()];
         gpu_mat.albedo_index = mat.textures[0].index; // slot 0 = albedo
         gpu_mat.flags = mat.flags;
-        gpu_mat.emissive_factor = if (mat.flags & 0x1) != 0 {
-            (mat.emissive_strength * 255.0) as u32
+        gpu_mat.emissive_factor = if mat.flags.is_blackbody() {
+            let ef = (mat.emissive_strength * 255.0) as u32;
+            if ef == 0 { 255 } else { ef }
         } else {
             0
         };
 
+        let is_emissive = mat.flags.is_blackbody();
+        gpu_mat.surface_type = SurfaceType::from_material(mat.roughness, mat.metalness, is_emissive);
     }
     material_index
 }
@@ -721,7 +724,7 @@ pub extern "C" fn RT_RaytraceMeshColor(
         transform,
         color,
         material_override: None,
-        object_type: 255, // OBJ_NONE
+        object_type: ObjectType::None,
     });
 }
 
@@ -747,7 +750,7 @@ pub extern "C" fn RT_RaytraceMesh(
         transform,
         color: RGBA8::WHITE,
         material_override: None,
-        object_type: 255, // OBJ_NONE
+        object_type: ObjectType::None,
     });
 }
 
@@ -774,7 +777,7 @@ pub extern "C" fn RT_RaytraceMeshOverrideMaterial(
         transform,
         color: RGBA8::WHITE,
         material_override: BitmapIndex::new(material_override),
-        object_type: 255, // OBJ_NONE
+        object_type: ObjectType::None,
     });
 }
 

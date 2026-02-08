@@ -684,8 +684,10 @@ void render_object(object *obj)
 {
 	int mld_save;
 
+#if !defined(RT_METAL)
 	if ( obj == Viewer )
 		return;
+#endif
 	
 	// Don't draw a player if we are observing them in first person.
 	if (Game_mode & GM_OBSERVER && Obs_at_distance == 0 && obj->type == OBJ_PLAYER && Current_obs_player != OBSERVER_PLAYER_ID && Players[Current_obs_player].objnum == obj - Objects) {

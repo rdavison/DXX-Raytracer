@@ -201,6 +201,15 @@ RT_LightDefinition g_light_definitions[] =
 		.spot_angle = 0.3f,
 		.spot_softness = 0.2f,
 	},
+	// Lava glow light (animated texture — pig uses # as frame delimiter)
+	{
+		.name = "lava02#0",
+		.kind = RT_LightKind_Area_Rect,
+		.emission = {8.f, 3.f, 0.5f},
+		.radius = 0.8f,
+		.spot_angle = 0.3f,
+		.spot_softness = 0.2f,
+	},
 	// Blue lights on metl material.
 	{
 		.name = "metl078",
@@ -280,32 +289,30 @@ void RT_ResetLightSettings()
 	RT_SetSettingsNotification(&g_lights_notification, "Reset Light Settings", (ImVec4){0.5f, 0.7f, 1.0f, 1.0f});
 }
 
-int RT_IsLight(int tmap) 
+// Compare bitmap base names, ignoring the #N animation frame suffix.
+// e.g. "lava02#3" and "lava02#0" both have base name "lava02" and match.
+// Non-animated names like "ceil002" have no # and match by full string.
+static int bitmap_base_name_match(const char *a, const char *b)
 {
-	char name[13] = {0};
+	const char *hash_a = strchr(a, '#');
+	const char *hash_b = strchr(b, '#');
+	size_t len_a = hash_a ? (size_t)(hash_a - a) : strlen(a);
+	size_t len_b = hash_b ? (size_t)(hash_b - b) : strlen(b);
+	return len_a == len_b && strncmp(a, b, len_a) == 0;
+}
 
-	//piggy_get_bitmap_name(Textures[tmap].index, name);
-	//printf("texture index:%d, texture name:%s\n", tmap, name);
+int RT_IsLight(int tmap)
+{
+	if (Textures[tmap].index == 0)
+		return -1;
 
+	// Get the bitmap name for this tmap's current frame
+	char tmap_name[13] = {0};
+	piggy_get_bitmap_name(Textures[tmap].index, tmap_name);
 
-
-	//TODO: If this starts to become a performance bottleneck, add a hashmap so the lookups can be done in O(1)
 	for (int i = 0; i < RT_ARRAY_COUNT(g_light_definitions); i++)
 	{
-		//NOTE (sam)
-		//Local char array to avoid write access violation on string literals.
-		char lChar[128] = { 0 };
-		size_t sSize = strlen(g_light_definitions[i].name);
-		if (sSize > 127)
-		{
-			sSize = 127;
-			RT_LOG(RT_LOGSERVERITY_ASSERT, "Hashtable search has a string that is bigger then 127 bytes.");
-		}
-
-		memcpy(lChar, g_light_definitions[i].name, sSize);
-
-		bitmap_index game_texture = piggy_find_bitmap(lChar);
-		if (game_texture.index == Textures[tmap].index && game_texture.index > 0) {
+		if (bitmap_base_name_match(tmap_name, g_light_definitions[i].name)) {
 			return i;
 		}
 	}

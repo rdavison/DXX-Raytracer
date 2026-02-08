@@ -5,7 +5,7 @@
 
 use super::color::RGBA8;
 use super::indices::BitmapIndex;
-use crate::types::{Camera, Mat4, ResourceHandle, Vec2, Vec3};
+use crate::types::{Camera, Mat4, ObjectType, ResourceHandle, Vec2, Vec3};
 
 /// Validated mesh handle — wraps a `ResourceHandle` that is known to exist
 /// in the `MeshSlotMap` at the time of creation.
@@ -43,7 +43,7 @@ pub enum SceneInstance {
         transform: Mat4,
         color: RGBA8,
         material_override: Option<BitmapIndex>,
-        object_type: u8,
+        object_type: ObjectType,
     },
     /// Camera-facing billboard sprite.
     Billboard {
@@ -145,11 +145,10 @@ impl SceneInstance {
         }
     }
 
-    /// The game object type (OBJ_WEAPON=5, etc). Billboards/Rods return 255 (OBJ_NONE).
-    pub fn object_type(&self) -> u8 {
+    pub fn object_type(&self) -> ObjectType {
         match self {
             Self::LevelMesh { object_type, .. } => *object_type,
-            Self::Billboard { .. } | Self::Rod { .. } => 255,
+            Self::Billboard { .. } | Self::Rod { .. } => ObjectType::None,
         }
     }
 }
@@ -252,7 +251,7 @@ mod tests {
             transform: Mat4::identity(),
             color: RGBA8::WHITE,
             material_override: None,
-            object_type: 255,
+            object_type: ObjectType::None,
         };
         assert!(inst.material_override().is_none());
     }
@@ -266,7 +265,7 @@ mod tests {
             transform: Mat4::identity(),
             color: RGBA8::WHITE,
             material_override: Some(mat),
-            object_type: 255,
+            object_type: ObjectType::None,
         };
         assert_eq!(inst.material_override().unwrap().as_u16(), 99);
     }
