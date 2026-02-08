@@ -2175,6 +2175,8 @@ void show_reticle(int reticle_type, int secondary_display)
 	x = grd_curcanv->cv_bitmap.bm_w/2;
 #if defined(RT_DX12) || defined(RT_METAL)
 	y = grd_curcanv->cv_bitmap.bm_h/2 - grd_curcanv->cv_bitmap.bm_h * (RT_RaytraceGetVerticalOffset());
+	// Raise reticle ~4% above center for a more natural aiming point
+	y -= grd_curcanv->cv_bitmap.bm_h / 25;
 #else
 	y = grd_curcanv->cv_bitmap.bm_h/2;
 #endif
@@ -2206,6 +2208,34 @@ void show_reticle(int reticle_type, int secondary_display)
 	gr_setcolor(BM_XRGB(PlayerCfg.ReticleRGBA[0],PlayerCfg.ReticleRGBA[1],PlayerCfg.ReticleRGBA[2]));
 	gr_settransblend(PlayerCfg.ReticleRGBA[3], GR_BLEND_NORMAL);
 
+#if defined(RT_METAL)
+	// Modern minimal reticle: thin broken crosshair with center dot
+	{
+		int gap = size / 5;          // gap from center
+		int arm = size / 2;          // arm length from center
+		int dot = (size / 16 > 1) ? size / 16 : 1; // small center dot radius
+
+		// Center dot
+		gr_disk(i2f(x), i2f(y), i2f(dot));
+
+		// Four arms with gap (broken cross)
+		gr_uline(i2f(x), i2f(y - arm), i2f(x), i2f(y - gap));  // top
+		gr_uline(i2f(x), i2f(y + gap), i2f(x), i2f(y + arm));  // bottom
+		gr_uline(i2f(x - arm), i2f(y), i2f(x - gap), i2f(y));  // left
+		gr_uline(i2f(x + gap), i2f(y), i2f(x + arm), i2f(y));  // right
+
+		// Weapon readiness ticks at arm tips
+		if (primary_bm_num > 0) {
+			// Small horizontal ticks at left/right arm ends
+			gr_uline(i2f(x - arm), i2f(y - dot), i2f(x - arm), i2f(y + dot));
+			gr_uline(i2f(x + arm), i2f(y - dot), i2f(x + arm), i2f(y + dot));
+		}
+		if (secondary_bm_num > 0) {
+			// Small vertical tick at bottom arm end
+			gr_uline(i2f(x - dot), i2f(y + arm), i2f(x + dot), i2f(y + arm));
+		}
+	}
+#else
 	switch (reticle_type)
 	{
 		case RET_TYPE_CLASSIC:
@@ -2260,7 +2290,7 @@ void show_reticle(int reticle_type, int secondary_display)
 		case RET_TYPE_CIRCLE:
 			// Hack!  Something is going wrong in OGL-land with these numbers (???)
 			if(size == 33 && x == 960 && y == 540) { size = 24; }
-				
+
 			gr_ucircle(i2f(x),i2f(y),i2f(size/4));
 			if (secondary_display && secondary_bm_num == 1)
 				gr_uline(i2f(x-(size/2)-(size/5)), i2f(y-(size/2)), i2f(x-(size/5)-(size/5)), i2f(y-(size/5)));
@@ -2306,6 +2336,7 @@ void show_reticle(int reticle_type, int secondary_display)
 		default:
 			break;
 	}
+#endif
 	gr_settransblend(GR_FADE_OFF, GR_BLEND_NORMAL);
 }
 
