@@ -40,9 +40,11 @@ vertex TriVertexOut tri_vertex(TriVertexIn in [[stage_in]]) {
 
 fragment float4 tri_fragment(TriVertexOut in [[stage_in]],
                              texture2d<float> tex [[texture(0)]],
+                             texture2d<float> bloom_tex [[texture(1)]],
                              sampler samp [[sampler(0)]]) {
     float4 texColor = tex.sample(samp, in.uv);
-    return texColor * in.color;
+    float3 bloom = bloom_tex.sample(samp, in.uv).rgb;
+    return float4(texColor.rgb * (1.0 + bloom * 0.35), texColor.a) * in.color;
 }
 
 // ---- Line shaders ----

@@ -153,6 +153,29 @@ pub extern "C" fn RT_RendererInit(params: *const RendererInitParams) {
         eprintln!("[Rust Metal] ERROR: tile_cull_lights function not found in library");
     }
 
+    // Create bloom compute pipelines from same library
+    for name in ["bloom_threshold", "bloom_blur_h", "bloom_blur_v"] {
+        let fn_name = objc2_foundation::NSString::from_str(name);
+        if let Some(func) = rt_library.newFunctionWithName(&fn_name) {
+            match s.device.newComputePipelineStateWithFunction_error(&func) {
+                Ok(pipeline) => {
+                    match name {
+                        "bloom_threshold" => s.bloom_threshold_pipeline = Some(pipeline),
+                        "bloom_blur_h"    => s.bloom_blur_h_pipeline = Some(pipeline),
+                        "bloom_blur_v"    => s.bloom_blur_v_pipeline = Some(pipeline),
+                        _ => {}
+                    }
+                    eprintln!("[Rust Metal] Bloom pipeline '{}' created", name);
+                }
+                Err(e) => {
+                    eprintln!("[Rust Metal] ERROR: Failed to create bloom pipeline '{}': {:?}", name, e);
+                }
+            }
+        } else {
+            eprintln!("[Rust Metal] ERROR: {} function not found in library", name);
+        }
+    }
+
     // Create cached raytrace sampler (reused every frame)
     {
         let sampler_desc = MTLSamplerDescriptor::new();
@@ -400,6 +423,9 @@ fn present_frame() {
             encoder.setRenderPipelineState(tri_pipe);
             unsafe { encoder.setFragmentSamplerState_atIndex(Some(samp), 0); }
             unsafe { encoder.setFragmentTexture_atIndex(Some(rt_tex), 0); }
+            if let Some(bloom_tex) = s.bloom_texture_a.as_ref() {
+                unsafe { encoder.setFragmentTexture_atIndex(Some(bloom_tex), 1); }
+            }
 
             let byte_len = fullscreen_verts.len() * std::mem::size_of::<RasterTriVertex>();
             let vb = unsafe {
@@ -878,6 +904,28 @@ pub extern "C" fn RT_RaytraceRender() {
         s.raytrace_sampler.as_deref(),
         s.arg_buffer.as_deref(),
     );
+
+    // Dispatch bloom post-processing (3 half-res compute passes)
+    if let (Some(tp), Some(bhp), Some(bvp)) = (
+        s.bloom_threshold_pipeline.as_ref().cloned(),
+        s.bloom_blur_h_pipeline.as_ref().cloned(),
+        s.bloom_blur_v_pipeline.as_ref().cloned(),
+    ) {
+        renderer::raytrace::dispatch_bloom(
+            &s.device,
+            &s.command_queue,
+            &output_tex,
+            &mut s.bloom_texture_a,
+            &mut s.bloom_texture_b,
+            &mut s.bloom_w,
+            &mut s.bloom_h,
+            render_w,
+            render_h,
+            &tp,
+            &bhp,
+            &bvp,
+        );
+    }
 
     if s.frame_index % 120 == 0 {
         eprintln!(

@@ -199,6 +199,15 @@ pub struct MetalState {
     // Bindless texture argument buffer (Tier 2)
     pub arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
     pub arg_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+
+    // Bloom post-processing
+    pub bloom_texture_a: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    pub bloom_texture_b: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    pub bloom_threshold_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    pub bloom_blur_h_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    pub bloom_blur_v_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    pub bloom_w: u32,
+    pub bloom_h: u32,
 }
 
 // SAFETY: Renderer is only called from the game's main thread.
@@ -270,6 +279,15 @@ pub fn init(device_state: DeviceState) {
         // Bindless texture argument buffer (created in RT_RendererInit after white texture)
         arg_encoder: None,
         arg_buffer: None,
+
+        // Bloom post-processing (created in RT_RendererInit after raytrace pipeline)
+        bloom_texture_a: None,
+        bloom_texture_b: None,
+        bloom_threshold_pipeline: None,
+        bloom_blur_h_pipeline: None,
+        bloom_blur_v_pipeline: None,
+        bloom_w: 0,
+        bloom_h: 0,
     };
 
     unsafe {

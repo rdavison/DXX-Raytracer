@@ -231,7 +231,7 @@ float3 decode_rgbe(uint rgbe) {
     float r = float((rgbe >>  0) & 0x1FFu) * scale;
     float g = float((rgbe >>  9) & 0x1FFu) * scale;
     float b = float((rgbe >> 18) & 0x1FFu) * scale;
-    return float3(r, g, b) * 1000.0; // RT_LIGHT_SCALE
+    return float3(r, g, b) * 250.0; // RT_LIGHT_SCALE
 }
 
 // Tone mapping: Reinhard-style shoulder curve
@@ -652,7 +652,7 @@ kernel void raytrace_main(
             uint tri_idx = inst.triangle_offset + hit_prim_id;
             constant Triangle& tri = triangles[tri_idx];
 
-            // Barycentric interpolation for normal
+            // Barycentric interpolation for smooth normal (diffuse)
             float w0 = 1.0 - hit_bary.x - hit_bary.y;
             float3 normal_local = normalize(tri.norm0 * w0 + tri.norm1 * hit_bary.x + tri.norm2 * hit_bary.y);
 
@@ -711,7 +711,30 @@ kernel void raytrace_main(
                 }
             }
 
-            float3 total_light = float3(0.0);
+            // Detail noise overlay: subtle world-space variation to break up texture tiling
+            {
+                uint mei_raw = tri.material_edge_index;
+                bool is_billboard = (mei_raw == RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE);
+                bool is_polymodel = (mei_raw & (RT_TRIANGLE_HOLDS_MATERIAL_EDGE | RT_TRIANGLE_HOLDS_MATERIAL_INDEX)) != 0;
+                if (!is_billboard && !is_polymodel) {
+                    // Two octaves of value noise from world position
+                    float2 hp = float2(dot(hit_pos, float3(127.1, 311.7, 74.7)),
+                                       dot(hit_pos, float3(269.5, 183.3, 246.1)));
+                    float n1 = fract(sin(dot(floor(hp * 0.3), float2(12.9898, 78.233))) * 43758.5453);
+                    float n2 = fract(sin(dot(floor(hp * 1.2), float2(63.7264, 10.873))) * 43758.5453);
+                    float noise = n1 * 0.6 + n2 * 0.4; // [0, 1]
+                    // Modulate albedo brightness: range ~0.88 to 1.12
+                    albedo *= 0.88 + noise * 0.24;
+                }
+            }
+
+            // Hemisphere ambient: cool blue from above, warm brown from below
+            float hemisphere_blend = normal_world.y * 0.5 + 0.5; // 0=down, 1=up
+            float3 sky_color   = float3(0.06, 0.08, 0.12); // cool blue
+            float3 ground_color = float3(0.05, 0.04, 0.03); // warm brown
+            float3 total_light = mix(ground_color, sky_color, hemisphere_blend);
+            float3 total_specular = float3(0.0);
+            float3 V = -dir; // view direction (toward camera)
 
             if (scene.light_count > 0) {
                 // Tile-based light loop: read culled light list for this pixel's tile
@@ -806,16 +829,25 @@ kernel void raytrace_main(
                     }
 
                     total_light += light_emission * NdotL * attenuation * visibility;
+
+                    // Phong specular: use interpolated normal for smooth blending across triangles
+                    float3 R = reflect(-L, normal_world);
+                    float RdotV = max(dot(R, V), 0.0);
+                    float spec = pow(RdotV, 128.0);
+                    total_specular += light_emission * spec * attenuation * visibility;
                 }
             } else {
                 // Fallback: simple directional light when no lights submitted
                 float3 light_dir = normalize(float3(0.3, 1.0, 0.5));
                 float NdotL = max(dot(normal_world, light_dir), 0.0);
                 total_light = float3(NdotL * 0.85 + 0.15);
+                float3 R = reflect(-light_dir, normal_world);
+                float spec = pow(max(dot(R, V), 0.0), 128.0);
+                total_specular = float3(spec * 0.5);
             }
 
-            // Relaxed Lambertian BRDF (divided by 2 instead of π for brighter walls)
-            float3 hdr = (albedo / 2.0) * total_light;
+            // Lambertian BRDF + Phong specular (shininess=128, ks=0.5)
+            float3 hdr = (albedo / 2.0) * total_light + total_specular * 0.5;
 
             // Emissive contribution (self-illuminating surfaces glow regardless of lighting)
             {
@@ -837,6 +869,80 @@ kernel void raytrace_main(
             // Weapon polymodels glow self-lit (OBJ_WEAPON == 5)
             if (inst.object_type == 5u) {
                 hdr = albedo * scene.billboard_emissive_boost;
+            }
+
+            // Single-bounce specular reflection (nearby geometry bleeds into surfaces)
+            if (scene.use_accel != 0) {
+                float3 refl_dir = reflect(dir, normal_world);
+                ray refl_ray;
+                refl_ray.origin = hit_pos + normal_world * 0.01;
+                refl_ray.direction = refl_dir;
+                refl_ray.min_distance = 0.001;
+                refl_ray.max_distance = 200.0;
+
+                intersector<triangle_data, instancing> refl_i;
+                refl_i.assume_geometry_type(geometry_type::triangle);
+                refl_i.force_opacity(forced_opacity::opaque);
+                auto refl_hit = refl_i.intersect(refl_ray, accel_struct, 0xFF);
+
+                if (refl_hit.type != intersection_type::none) {
+                    uint r_inst_id = refl_hit.instance_id;
+                    uint r_prim_id = refl_hit.primitive_id;
+                    constant Instance& r_inst = instances[r_inst_id];
+                    uint r_tri_idx = r_inst.triangle_offset + r_prim_id;
+                    constant Triangle& r_tri = triangles[r_tri_idx];
+
+                    // Interpolate reflection hit normal + UV
+                    float2 r_bary = refl_hit.triangle_barycentric_coord;
+                    float r_w0 = 1.0 - r_bary.x - r_bary.y;
+                    float3 r_normal_local = normalize(r_tri.norm0 * r_w0 + r_tri.norm1 * r_bary.x + r_tri.norm2 * r_bary.y);
+                    float3x3 r_nmat = float3x3(r_inst.world_to_object[0].xyz, r_inst.world_to_object[1].xyz, r_inst.world_to_object[2].xyz);
+                    float3 r_normal = normalize(transpose(r_nmat) * r_normal_local);
+                    if (dot(r_normal, refl_dir) > 0.0) r_normal = -r_normal;
+
+                    float2 r_uv = float2(r_tri.uv0) * r_w0 + float2(r_tri.uv1) * r_bary.x + float2(r_tri.uv2) * r_bary.y;
+                    float3 r_hit_pos = refl_ray.origin + refl_dir * refl_hit.distance;
+
+                    // Reflection albedo from texture
+                    float4 r_inst_color = decode_color(r_inst.color);
+                    float3 r_albedo = (decode_color(r_tri.color) * r_inst_color).rgb;
+                    if (r_tri.material_edge_index != RT_TRIANGLE_MATERIAL_INSTANCE_OVERRIDE) {
+                        uint r_mat = resolve_material_index(r_tri.material_edge_index, material_edges, material_indices);
+                        uint r_tex = gpu_materials[r_mat].albedo_index;
+                        float4 r_samp = sample_bindless(r_tex, r_uv, tex_array, tex_sampler);
+                        if (r_samp.a > 0.0) r_albedo = r_samp.rgb * r_inst_color.rgb;
+                    }
+
+                    // Basic diffuse shading at reflection hit (no shadows for perf)
+                    float3 r_light = float3(0.05);
+                    uint r_tile_x = gid.x / TILE_SIZE;
+                    uint r_tile_y = gid.y / TILE_SIZE;
+                    uint r_tile_idx = r_tile_y * ((scene.render_width + TILE_SIZE - 1) / TILE_SIZE) + r_tile_x;
+                    uint r_tile_base = r_tile_idx * TILE_STRIDE;
+                    uint r_tile_count = min(tile_light_data[r_tile_base], MAX_LIGHTS_PER_TILE);
+                    for (uint rli = 0; rli < r_tile_count; rli++) {
+                        uint li = tile_light_data[r_tile_base + 1 + rli];
+                        float3 lp = float3(lights[li].transform[3], lights[li].transform[7], lights[li].transform[11]);
+                        float3 to_l = lp - r_hit_pos;
+                        float d2 = dot(to_l, to_l);
+                        float3 le = decode_rgbe(lights[li].emission);
+                        float em = max(max(le.r, le.g), le.b);
+                        if (d2 > em * 100.0) continue;
+                        float d = sqrt(d2);
+                        if (d < 0.001) continue;
+                        float ndl = max(dot(r_normal, to_l / d), 0.0);
+                        r_light += le * ndl / max(d2, 1.0);
+                    }
+
+                    float3 r_color = (r_albedo / 3.14159) * r_light;
+
+                    // Schlick Fresnel: more reflection at grazing angles
+                    float cos_theta = max(dot(-dir, normal_world), 0.0);
+                    float f0 = 0.04; // dielectric base reflectivity
+                    float fresnel = f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
+
+                    hdr = mix(hdr, r_color, fresnel);
+                }
             }
 
             hdr *= exp2(0.1); // exposure
@@ -906,6 +1012,80 @@ kernel void raytrace_main(
     }
 
     output.write(final_color, gid);
+}
+
+// ============================================================================
+// Bloom post-processing kernels
+// ============================================================================
+
+// Threshold + downsample: full-res raytrace output → half-res bloom texture
+kernel void bloom_threshold(
+    texture2d<float, access::read>  input  [[texture(0)]],
+    texture2d<float, access::write> output [[texture(1)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    uint out_w = output.get_width();
+    uint out_h = output.get_height();
+    if (gid.x >= out_w || gid.y >= out_h) return;
+
+    // 2x2 box downsample from full-res input
+    uint2 src = gid * 2;
+    float4 s0 = input.read(src + uint2(0, 0));
+    float4 s1 = input.read(src + uint2(1, 0));
+    float4 s2 = input.read(src + uint2(0, 1));
+    float4 s3 = input.read(src + uint2(1, 1));
+    float3 avg = (s0.rgb + s1.rgb + s2.rgb + s3.rgb) * 0.25;
+
+    // Luminance-based soft threshold
+    float lum = dot(avg, float3(0.2126, 0.7152, 0.0722));
+    float knee = smoothstep(0.6, 1.0, lum);
+    float3 bloom = avg * knee;
+
+    output.write(float4(bloom, 1.0), gid);
+}
+
+// Horizontal 9-tap Gaussian blur
+kernel void bloom_blur_h(
+    texture2d<float, access::read>  input  [[texture(0)]],
+    texture2d<float, access::write> output [[texture(1)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    uint w = output.get_width();
+    uint h = output.get_height();
+    if (gid.x >= w || gid.y >= h) return;
+
+    const float weights[5] = { 0.227027, 0.194946, 0.121621, 0.054054, 0.016216 };
+
+    float3 result = input.read(gid).rgb * weights[0];
+    for (int i = 1; i < 5; i++) {
+        uint lx = uint(max(int(gid.x) - i, 0));
+        uint rx = min(gid.x + uint(i), w - 1);
+        result += input.read(uint2(lx, gid.y)).rgb * weights[i];
+        result += input.read(uint2(rx, gid.y)).rgb * weights[i];
+    }
+    output.write(float4(result, 1.0), gid);
+}
+
+// Vertical 9-tap Gaussian blur
+kernel void bloom_blur_v(
+    texture2d<float, access::read>  input  [[texture(0)]],
+    texture2d<float, access::write> output [[texture(1)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    uint w = output.get_width();
+    uint h = output.get_height();
+    if (gid.x >= w || gid.y >= h) return;
+
+    const float weights[5] = { 0.227027, 0.194946, 0.121621, 0.054054, 0.016216 };
+
+    float3 result = input.read(gid).rgb * weights[0];
+    for (int i = 1; i < 5; i++) {
+        uint ly = uint(max(int(gid.y) - i, 0));
+        uint ry = min(gid.y + uint(i), h - 1);
+        result += input.read(uint2(gid.x, ly)).rgb * weights[i];
+        result += input.read(uint2(gid.x, ry)).rgb * weights[i];
+    }
+    output.write(float4(result, 1.0), gid);
 }
 "#;
 

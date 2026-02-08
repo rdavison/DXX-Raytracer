@@ -350,6 +350,123 @@ pub fn ensure_output_texture(
     eprintln!("[Rust Metal] Raytrace output texture created: {}x{}", width, height);
 }
 
+/// Ensure bloom textures exist at half resolution and match the render size.
+fn ensure_bloom_textures(
+    device: &ProtocolObject<dyn MTLDevice>,
+    bloom_a: &mut Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    bloom_b: &mut Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    bloom_w: &mut u32,
+    bloom_h: &mut u32,
+    render_width: u32,
+    render_height: u32,
+) {
+    let half_w = render_width / 2;
+    let half_h = render_height / 2;
+    if *bloom_w == half_w && *bloom_h == half_h && bloom_a.is_some() && bloom_b.is_some() {
+        return;
+    }
+
+    let desc = unsafe {
+        MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+            MTLPixelFormat::RGBA8Unorm,
+            half_w as usize,
+            half_h as usize,
+            false,
+        )
+    };
+    desc.setUsage(MTLTextureUsage(MTLTextureUsage::ShaderWrite.0 | MTLTextureUsage::ShaderRead.0));
+    desc.setStorageMode(MTLStorageMode::Private);
+
+    *bloom_a = device.newTextureWithDescriptor(&desc);
+    *bloom_b = device.newTextureWithDescriptor(&desc);
+    *bloom_w = half_w;
+    *bloom_h = half_h;
+    eprintln!("[Rust Metal] Bloom textures created: {}x{}", half_w, half_h);
+}
+
+/// Dispatch the 3-pass bloom post-processing filter.
+///
+/// Pass 1: Threshold + downsample (full-res → half-res bloom_a)
+/// Pass 2: Horizontal Gaussian blur (bloom_a → bloom_b)
+/// Pass 3: Vertical Gaussian blur (bloom_b → bloom_a)
+///
+/// Result ends up in bloom_texture_a, ready for compositing.
+pub fn dispatch_bloom(
+    device: &ProtocolObject<dyn MTLDevice>,
+    command_queue: &ProtocolObject<dyn MTLCommandQueue>,
+    output_texture: &ProtocolObject<dyn MTLTexture>,
+    bloom_a: &mut Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    bloom_b: &mut Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    bloom_w: &mut u32,
+    bloom_h: &mut u32,
+    render_width: u32,
+    render_height: u32,
+    threshold_pipeline: &ProtocolObject<dyn MTLComputePipelineState>,
+    blur_h_pipeline: &ProtocolObject<dyn MTLComputePipelineState>,
+    blur_v_pipeline: &ProtocolObject<dyn MTLComputePipelineState>,
+) {
+    ensure_bloom_textures(device, bloom_a, bloom_b, bloom_w, bloom_h, render_width, render_height);
+
+    let tex_a = match bloom_a.as_ref() {
+        Some(t) => t,
+        None => return,
+    };
+    let tex_b = match bloom_b.as_ref() {
+        Some(t) => t,
+        None => return,
+    };
+
+    let half_w = *bloom_w;
+    let half_h = *bloom_h;
+    let threads_per_group = MTLSize { width: 8, height: 8, depth: 1 };
+    let threadgroups = MTLSize {
+        width: (half_w as usize + 7) / 8,
+        height: (half_h as usize + 7) / 8,
+        depth: 1,
+    };
+
+    let cmd_buf = match command_queue.commandBuffer() {
+        Some(b) => b,
+        None => return,
+    };
+
+    // Pass 1: Threshold (output_texture → bloom_a)
+    if let Some(enc) = cmd_buf.computeCommandEncoder() {
+        enc.setComputePipelineState(threshold_pipeline);
+        unsafe {
+            enc.setTexture_atIndex(Some(output_texture), 0);
+            enc.setTexture_atIndex(Some(tex_a), 1);
+        }
+        enc.dispatchThreadgroups_threadsPerThreadgroup(threadgroups, threads_per_group);
+        enc.endEncoding();
+    }
+
+    // Pass 2: Horizontal blur (bloom_a → bloom_b)
+    if let Some(enc) = cmd_buf.computeCommandEncoder() {
+        enc.setComputePipelineState(blur_h_pipeline);
+        unsafe {
+            enc.setTexture_atIndex(Some(tex_a), 0);
+            enc.setTexture_atIndex(Some(tex_b), 1);
+        }
+        enc.dispatchThreadgroups_threadsPerThreadgroup(threadgroups, threads_per_group);
+        enc.endEncoding();
+    }
+
+    // Pass 3: Vertical blur (bloom_b → bloom_a)
+    if let Some(enc) = cmd_buf.computeCommandEncoder() {
+        enc.setComputePipelineState(blur_v_pipeline);
+        unsafe {
+            enc.setTexture_atIndex(Some(tex_b), 0);
+            enc.setTexture_atIndex(Some(tex_a), 1);
+        }
+        enc.dispatchThreadgroups_threadsPerThreadgroup(threadgroups, threads_per_group);
+        enc.endEncoding();
+    }
+
+    cmd_buf.commit();
+    cmd_buf.waitUntilCompleted();
+}
+
 /// Dispatch the raytracing compute shader.
 /// Uses pre-allocated FrameBuffers to avoid per-frame GPU allocations.
 pub fn dispatch(
