@@ -928,9 +928,11 @@ kernel void raytrace_main(
             // PBR-lite BRDF: metalness controls diffuse/specular balance
             // Both diffuse and specular are filtered by the material's color —
             // a red wall absorbs blue/green from all reflected light, including highlights.
+            // Rough surfaces scatter light broadly so specular intensity drops with (1-r)^2.
             float3 diffuse = albedo * refl_tint * (1.0 - metalness) * total_light / 3.14159;
             float3 spec_color = mix(refl_tint * 0.06, albedo, metalness);
-            float3 specular = spec_color * total_specular;
+            float spec_atten = (1.0 - roughness) * (1.0 - roughness);
+            float3 specular = spec_color * total_specular * spec_atten;
             float3 hdr = diffuse + specular;
             float emissive_blend = 0.0; // 0 = normal tonemapping, 1 = bypass for full-bright emissive
             float lava_blend = 0.0;     // 1 = apply blackbody color ramp (lava only)
