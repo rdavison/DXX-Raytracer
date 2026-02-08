@@ -205,7 +205,7 @@ RT_LightDefinition g_light_definitions[] =
 	{
 		.name = "lava02#0",
 		.kind = RT_LightKind_Area_Rect,
-		.emission = {8.f, 3.f, 0.5f},
+		.emission = {3.f, 1.2f, 0.2f},
 		.radius = 0.8f,
 		.spot_angle = 0.3f,
 		.spot_softness = 0.2f,

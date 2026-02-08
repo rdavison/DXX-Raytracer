@@ -938,7 +938,7 @@ kernel void raytrace_main(
                     if (is_blackbody) {
                         // All blackbody surfaces: self-illuminating, bypass tonemapping
                         float strength = (ef > 0u) ? float(ef) / 255.0 : 1.0;
-                        hdr = albedo * strength * 3.0;
+                        hdr = albedo * strength;
                         emissive_blend = 1.0;
                         // Lava detection: high saturation + warm (red-dominant) color
                         float cmax = max(max(albedo.r, albedo.g), albedo.b);
@@ -1132,21 +1132,26 @@ kernel void raytrace_main(
             // Emissive output: either lava color ramp or boosted albedo
             float3 emissive_out = hdr; // default: boosted albedo (for lights, keys, etc.)
             if (lava_blend > 0.5) {
-                // Lava: blackbody color ramp based on texture luminance as heat
+                // Lava: blackbody color ramp based on texture luminance as heat.
+                // Dark texels = cooled crust (dark red), bright texels = molten core (white-hot).
                 float heat = dot(albedo, float3(0.299, 0.587, 0.114));
-                float max_c = max(max(albedo.r, albedo.g), albedo.b);
-                heat = (max_c > 0.01) ? heat / max_c : heat;
-                heat = clamp(heat * 1.8, 0.0, 1.0);
-                // Blackbody ramp: red → bright orange → yellow → white-hot
-                if (heat < 0.3) {
-                    float t = heat / 0.3;
-                    emissive_out = mix(float3(0.6, 0.03, 0.0), float3(1.0, 0.25, 0.0), t);
+                heat = clamp(heat, 0.0, 1.0);
+                // Blackbody ramp: dark red → red → orange → yellow → white-hot
+                if (heat < 0.2) {
+                    float t = heat / 0.2;
+                    emissive_out = mix(float3(0.6, 0.04, 0.0), float3(1.0, 0.3, 0.02), t);
+                } else if (heat < 0.4) {
+                    float t = (heat - 0.2) / 0.2;
+                    emissive_out = mix(float3(1.0, 0.3, 0.02), float3(1.0, 0.65, 0.1), t);
                 } else if (heat < 0.6) {
-                    float t = (heat - 0.3) / 0.3;
-                    emissive_out = mix(float3(1.0, 0.25, 0.0), float3(1.0, 0.7, 0.1), t);
+                    float t = (heat - 0.4) / 0.2;
+                    emissive_out = mix(float3(1.0, 0.65, 0.1), float3(1.0, 0.9, 0.4), t);
+                } else if (heat < 0.8) {
+                    float t = (heat - 0.6) / 0.2;
+                    emissive_out = mix(float3(1.0, 0.9, 0.4), float3(1.0, 0.97, 0.7), t);
                 } else {
-                    float t = (heat - 0.6) / 0.4;
-                    emissive_out = mix(float3(1.0, 0.7, 0.1), float3(1.0, 1.0, 0.85), t);
+                    float t = (heat - 0.8) / 0.2;
+                    emissive_out = mix(float3(1.0, 0.97, 0.7), float3(1.0, 1.0, 0.9), t);
                 }
             }
             float3 shaded = mix(tonemapped, emissive_out, emissive_blend);
