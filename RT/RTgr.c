@@ -410,25 +410,24 @@ void RT_UpdateMaterialEdges(void)
 			uint16_t texture_idx = original_tmap2 & 0x3FFF;       // bits 0-13
 			uint16_t orientation = (original_tmap2 >> 14) & 0x3;  // bits 14-15
 
-			// Get door openness (0-15) if this side has a door wall
+			// Get door openness for this side's wall.
+			// Encoding: 0 = not a door (grate), 1 = door closed, 2-15 = door opening/open.
+			// This lets the shader distinguish grates (always alpha-check) from
+			// closed doors (always opaque) and opening doors (always transparent).
 			uint8_t door_openness = 0;
 			int wall_num = sd->wall_num;
 			if (wall_num >= 0 && wall_num < MAX_WALLS) {
 				wall* w = &Walls[wall_num];
 				if (w->type == WALL_DOOR) {
-					door_openness = RT_GetDoorOpenness(w);
-					// Debug: log when door is animating
-					if (door_openness > 0 && (debug_frame % 30) == 0) {
-						printf("[DOOR] wall %d state=%d openness=%d\n",
-							wall_num, w->state, door_openness);
-						fflush(stdout);
-					}
+					uint8_t raw_openness = RT_GetDoorOpenness(w);
+					// Offset by 1: closed=1, opening=2+. Clamp to 15 (4-bit field).
+					door_openness = (raw_openness == 0) ? 1 : (raw_openness < 15 ? raw_openness + 1 : 15);
 				}
 			}
 
 			// Re-encode mat2 with our layout:
 			// bits 0-9: texture index (truncate to 1023 max)
-			// bits 10-13: door openness (0-15)
+			// bits 10-13: door openness (0=grate, 1=door closed, 2-15=door opening)
 			// bits 14-15: orientation
 			if (texture_idx > RT_MAT2_TMAP_MASK) {
 				texture_idx = texture_idx & RT_MAT2_TMAP_MASK;  // Truncate, may cause issues

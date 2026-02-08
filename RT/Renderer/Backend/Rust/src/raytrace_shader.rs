@@ -209,8 +209,9 @@ bool should_skip_cutout(
     uint door_openness = (mat2_raw & RT_MAT2_DOOR_MASK) >> RT_MAT2_DOOR_SHIFT;
     uint orientation = (mat2_raw & RT_MAT2_ORIENT_MASK) >> RT_MAT2_ORIENT_SHIFT;
 
-    // Opening/closing door — fully transparent
-    if (door_openness > 0) return true;
+    // Door encoding: 0 = grate (alpha check), 1 = door closed (opaque), 2+ = door opening (transparent)
+    if (door_openness >= 2) return true;   // Opening/open door → fully transparent
+    if (door_openness == 1) return false;  // Closed door → render opaque
 
     // Determine which texture to sample (overlay preferred over base)
     uint tmap_num = (mat2_tex > 0) ? mat2_tex : mat1_tex;
