@@ -396,6 +396,7 @@ pub struct RenderMeshParams {
     pub prev_transform: *const Mat4,
     pub color: u32,
     pub material_override: u16,
+    pub object_type: u8,
 }
 
 #[repr(C)]

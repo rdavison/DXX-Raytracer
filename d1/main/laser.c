@@ -50,6 +50,12 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "logger.h"
 #include "palette.h"
 
+#if defined(RT_DX12) || defined(RT_METAL)
+#include "Renderer.h"
+#include "Core/MiniMath.h"
+#include "RTutil.h"
+#endif
+
 #define NEWHOMER
 
 int Network_laser_track = -1;
@@ -91,6 +97,33 @@ void Laser_render(object *obj)
 	default:
 		RT_LOG(RT_LOGSERVERITY_HIGH, "Invalid weapon render type in Laser_render\n" );
 	}
+
+#if defined(RT_DX12) || defined(RT_METAL)
+	// Emit dynamic point light so weapon bolts illuminate nearby walls
+	{
+		RT_Vec3 pos = RT_Vec3Fromvms_vector(&obj->pos);
+		// Laser color based on weapon level (red→yellow→green→blue)
+		float r = 1.0f, g = 0.4f, b = 0.2f;
+		if (obj->id >= LASER_ID && obj->id <= LASER_ID + 3) {
+			// Level 1-4 lasers: warm red-orange
+			r = 1.0f; g = 0.3f; b = 0.1f;
+		} else if (obj->id == SPREADFIRE_ID) {
+			r = 1.0f; g = 0.6f; b = 0.1f; // yellow-orange
+		} else if (obj->id == PLASMA_ID) {
+			r = 0.2f; g = 0.6f; b = 1.0f; // blue-ish
+		} else if (obj->id == FUSION_ID) {
+			r = 0.8f; g = 0.2f; b = 1.0f; // purple
+		} else if (obj->id == VULCAN_ID) {
+			r = 1.0f; g = 0.8f; b = 0.3f; // warm yellow
+		}
+		float brightness = 0.8f;
+		RT_Vec3 emission = RT_Vec3Make(r * brightness, g * brightness, b * brightness);
+		RT_Light weapon_light = RT_MakeSphericalLight(
+			RT_Vec3Divs(emission, RT_LIGHT_SCALE),
+			pos, 5.0f);
+		RT_RaytraceSubmitLight(weapon_light);
+	}
+#endif
 
 }
 

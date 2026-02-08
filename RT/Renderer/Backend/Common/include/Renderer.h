@@ -98,6 +98,7 @@ typedef struct RT_RenderMeshParams
 	const RT_Mat4* prev_transform; // if you supply this the renderer uses it instead of the tracked prev transform it knows from the key
 	uint32_t color;
 	uint16_t material_override;
+	uint8_t object_type;
 } RT_RenderMeshParams;
 
 // Volatile: Must match common.hlsl

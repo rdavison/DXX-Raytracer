@@ -1133,16 +1133,13 @@ void RT_DrawSubPolyModel(RT_ResourceHandle submodel, const RT_Mat4* const submod
 
 		RT_Vec4 color = { component, component, component, alpha };
 
-		if (object_type == 2) { // OBJ_ROBOT
-			color.x = 1.0f; color.y = 0.0f; color.z = 0.0f;
-		}
-
 		RT_RenderMeshParams params =
 		{
 			.key = key,
 			.mesh_handle = submodel,
 			.transform = submodel_transform,
 			.color = RT_PackRGBA(color),
+			.object_type = object_type,
 		};
 		RT_RaytraceMeshEx(&params);
 	}

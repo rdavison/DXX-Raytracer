@@ -49,7 +49,8 @@ struct Instance {
     uint   color;
     uint   material_override;
     uint   triangle_offset;
-    uint   _pad[3];
+    uint   object_type;
+    uint   _pad[2];
 };
 
 // Triangle layout: 152 bytes matching Rust Triangle struct
@@ -598,10 +599,21 @@ kernel void raytrace_main(
 
                 if (inst.material_override > 0u) {
                     uint albedo_idx = gpu_materials[inst.material_override].albedo_index;
+                    bool sampled_tex = false;
+                    // Try remap table first (alpha textures for cutout)
                     if (albedo_idx > 0u && albedo_idx < remap_table_size) {
                         uint slot = texture_remap[albedo_idx];
                         if (slot > 0u) {
                             float4 sampled = alpha_textures[slot].sample(tex_sampler, hit_uv);
+                            bb_alpha = sampled.a;
+                            bb_color = sampled.rgb * bb_inst_color.rgb;
+                            sampled_tex = true;
+                        }
+                    }
+                    // Fallback: bindless texture sampling (for rods/lasers not in remap)
+                    if (!sampled_tex) {
+                        float4 sampled = sample_bindless(albedo_idx, hit_uv, tex_array, tex_sampler);
+                        if (sampled.a > 0.0) {
                             bb_alpha = sampled.a;
                             bb_color = sampled.rgb * bb_inst_color.rgb;
                         }
@@ -609,10 +621,11 @@ kernel void raytrace_main(
                 }
 
                 if (bb_alpha >= scene.billboard_opacity_threshold) {
-                    // Opaque billboard subject: self-lit, no tonemapping (already LDR)
+                    // Opaque billboard/rod: self-lit with HDR boost + tonemapping
                     float3 boosted = bb_color * scene.billboard_emissive_boost;
-                    float3 blended = saturate(boosted) + accum_color;
-                    final_color = float4(LinearTosRGB(blended), 1.0);
+                    float3 hdr = boosted + accum_color;
+                    float3 tonemapped = ApplyTonemappingCurve(hdr);
+                    final_color = float4(LinearTosRGB(tonemapped), 1.0);
                     break;
                 } else if (bb_alpha >= 0.1) {
                     // Halo glow: translucent additive with emissive boost, continue ray
@@ -801,8 +814,8 @@ kernel void raytrace_main(
                 total_light = float3(NdotL * 0.85 + 0.15);
             }
 
-            // Lambertian BRDF + tone mapping
-            float3 hdr = (albedo / 3.14159265) * total_light;
+            // Relaxed Lambertian BRDF (divided by 2 instead of π for brighter walls)
+            float3 hdr = (albedo / 2.0) * total_light;
 
             // Emissive contribution (self-illuminating surfaces glow regardless of lighting)
             {
@@ -812,9 +825,18 @@ kernel void raytrace_main(
                     uint ef = gpu_materials[mat_slot].emissive_factor;
                     if (ef > 0u) {
                         float strength = float(ef) / 255.0;
-                        hdr += albedo * strength;
+                        if (strength >= 0.9) {
+                            hdr = albedo * strength;  // blackbody: albedo IS the light
+                        } else {
+                            hdr += albedo * strength; // partial emissive: additive
+                        }
                     }
                 }
+            }
+
+            // Weapon polymodels glow self-lit (OBJ_WEAPON == 5)
+            if (inst.object_type == 5u) {
+                hdr = albedo * scene.billboard_emissive_boost;
             }
 
             hdr *= exp2(0.1); // exposure

@@ -31,7 +31,8 @@ pub struct RaytraceInstance {
     pub color: u32,                 // 4
     pub material_override: u32,     // 4
     pub triangle_offset: u32,       // 4
-    pub _pad: [u32; 3],             // 12
+    pub object_type: u32,            // 4
+    pub _pad: [u32; 2],             // 8
 }
 
 /// Scene constants — 128 bytes, matches shader SceneConstants struct.
@@ -115,7 +116,8 @@ fn resolve_instances(
                 material_override: si.material_override()
                     .map(|m| m.as_u16() as u32).unwrap_or(0),
                 triangle_offset: 0,
-                _pad: [0; 3],
+                object_type: si.object_type() as u32,
+                _pad: [0; 2],
             },
             mesh_handle: handle,
         })
@@ -455,7 +457,7 @@ pub fn dispatch(
         use_accel,
         light_count: lights.len() as u32,
         billboard_opacity_threshold: 0.8,
-        billboard_emissive_boost: 2.5,
+        billboard_emissive_boost: 4.0,
         _pad4: [0; 2],
     };
 

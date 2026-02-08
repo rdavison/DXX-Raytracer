@@ -667,6 +667,7 @@ pub extern "C" fn RT_RaytraceMeshEx(params: *mut RenderMeshParams) {
         transform,
         color,
         material_override,
+        object_type: params.object_type,
     });
 }
 
@@ -694,6 +695,7 @@ pub extern "C" fn RT_RaytraceMeshColor(
         transform,
         color,
         material_override: None,
+        object_type: 255, // OBJ_NONE
     });
 }
 
@@ -719,6 +721,7 @@ pub extern "C" fn RT_RaytraceMesh(
         transform,
         color: RGBA8::WHITE,
         material_override: None,
+        object_type: 255, // OBJ_NONE
     });
 }
 
@@ -745,6 +748,7 @@ pub extern "C" fn RT_RaytraceMeshOverrideMaterial(
         transform,
         color: RGBA8::WHITE,
         material_override: BitmapIndex::new(material_override),
+        object_type: 255, // OBJ_NONE
     });
 }
 

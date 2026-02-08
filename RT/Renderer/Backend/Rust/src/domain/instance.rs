@@ -43,6 +43,7 @@ pub enum SceneInstance {
         transform: Mat4,
         color: RGBA8,
         material_override: Option<BitmapIndex>,
+        object_type: u8,
     },
     /// Camera-facing billboard sprite.
     Billboard {
@@ -141,6 +142,14 @@ impl SceneInstance {
             Self::LevelMesh { material_override, .. } => *material_override,
             Self::Billboard { material, .. } => Some(*material),
             Self::Rod { material, .. } => Some(*material),
+        }
+    }
+
+    /// The game object type (OBJ_WEAPON=5, etc). Billboards/Rods return 255 (OBJ_NONE).
+    pub fn object_type(&self) -> u8 {
+        match self {
+            Self::LevelMesh { object_type, .. } => *object_type,
+            Self::Billboard { .. } | Self::Rod { .. } => 255,
         }
     }
 }
@@ -243,6 +252,7 @@ mod tests {
             transform: Mat4::identity(),
             color: RGBA8::WHITE,
             material_override: None,
+            object_type: 255,
         };
         assert!(inst.material_override().is_none());
     }
@@ -256,6 +266,7 @@ mod tests {
             transform: Mat4::identity(),
             color: RGBA8::WHITE,
             material_override: Some(mat),
+            object_type: 255,
         };
         assert_eq!(inst.material_override().unwrap().as_u16(), 99);
     }
